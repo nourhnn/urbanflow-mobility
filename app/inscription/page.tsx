@@ -135,7 +135,7 @@ export default function InscriptionPage() {
               id="firstName"
               name="firstName"
               label="Prénom"
-              placeholder="Nour"
+              placeholder="Prénom"
               autoComplete="given-name"
               required
             />
@@ -236,5 +236,4 @@ export default function InscriptionPage() {
 
       </div>
     </main>
-  );
-}
+  )
