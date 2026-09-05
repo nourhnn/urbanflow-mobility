@@ -1,8 +1,6 @@
-import { Suspense } from "react";
-
 import BottomNavigation from "@/components/layout/BottomNavigation";
 import JourneyHistory from "@/components/journey/JourneyHistory";
-import JourneyPlanner from "@/components/journey/JourneyPlanner";
+import JourneyPlannerClient from "@/components/journey/JourneyPlannerClient";
 
 export default function TrajetsPage() {
   return (
@@ -19,17 +17,7 @@ export default function TrajetsPage() {
           </h1>
         </header>
 
-        <Suspense
-          fallback={
-            <div className="mt-8 flex items-center justify-center py-10">
-              <p className="uf-body text-muted">
-                Chargement du planificateur...
-              </p>
-            </div>
-          }
-        >
-          <JourneyPlanner />
-        </Suspense>
+        <JourneyPlannerClient />
 
         <JourneyHistory />
 
