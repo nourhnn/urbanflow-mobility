@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Gift,
+  Leaf,
   Home,
   Route,
   UserRound,
@@ -21,9 +21,9 @@ const navigation = [
     icon: Route,
   },
   {
-    label: "Récompenses",
+    label: "Impact",
     href: "/recompenses",
-    icon: Gift,
+    icon: Leaf,
   },
   {
     label: "Profil",

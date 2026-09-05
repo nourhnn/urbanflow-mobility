@@ -6,7 +6,6 @@ import {
   Footprints,
   Leaf,
   Mail,
-  MapPin,
   Settings,
   ShieldCheck,
   TrainFront,
@@ -17,7 +16,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import BottomNavigation from "@/components/layout/BottomNavigation";
+import SavedPlaces from "@/components/profile/SavedPlaces";
 import LogoutButton from "@/components/ui/LogoutButton";
+
 import { createClient } from "@/lib/supabase/server";
 
 const settings = [
@@ -56,11 +57,11 @@ export default async function ProfilPage() {
     redirect("/connexion");
   }
 
-  const {
-    data: profile,
-    error: profileError,
-  } =
-    await supabase
+  const [
+    profileResult,
+    journeysResult,
+  ] = await Promise.all([
+    supabase
       .from("profiles")
       .select(`
         first_name,
@@ -70,92 +71,93 @@ export default async function ProfilPage() {
         preferred_metro,
         preferred_bus,
         preferred_bike,
-        preferred_walk
+        preferred_walk,
+        home_address,
+        work_address
       `)
       .eq("id", user.id)
-      .single();
+      .single(),
 
-  if (profileError) {
-    console.error(
-      "Erreur chargement profil :",
-      profileError
-    );
-  }
-
-  const {
-    count: journeysCount,
-    error: journeysCountError,
-  } =
-    await supabase
+    supabase
       .from("journeys")
-      .select("id", {
-        count: "exact",
-        head: true,
-      })
-      .eq("user_id", user.id)
-      .eq("status", "rewarded");
+      .select(
+        "id",
+        {
+          count: "exact",
+          head: true,
+        }
+      )
+      .eq(
+        "user_id",
+        user.id
+      )
+      .eq(
+        "status",
+        "rewarded"
+      ),
+  ]);
 
-  if (journeysCountError) {
-    console.error(
-      "Erreur comptage trajets :",
-      journeysCountError
-    );
-  }
+  const profile =
+    profileResult.data;
+
+  const validatedJourneys =
+    journeysResult.count ??
+    0;
 
   const firstName =
-    profile?.first_name ??
-    user.user_metadata?.first_name ??
-    "Utilisateur";
-
-  const lastName =
-    profile?.last_name ??
-    user.user_metadata?.last_name ??
+    profile?.first_name ||
+    user.user_metadata
+      ?.first_name ||
     "";
 
+  const lastName =
+    profile?.last_name ||
+    user.user_metadata
+      ?.last_name ||
+    "";
+
+  const fullName =
+    `${firstName} ${lastName}`.trim() ||
+    "Utilisateur UrbanFlow";
+
   const flows =
-    profile?.flows ?? 0;
+    Number(
+      profile?.flows ??
+        0
+    );
 
   const co2Saved =
     Number(
-      profile?.co2_saved ?? 0
+      profile?.co2_saved ??
+        0
     );
 
-  const validatedJourneys =
-    journeysCount ?? 0;
-
-  const initial =
-    firstName.length > 0
-      ? firstName
-          .charAt(0)
-          .toUpperCase()
-      : "U";
-
-  const mobilityPreferences = [
+  const preferences = [
     {
-      label: "Métro",
+      label: "Métro / Train",
       icon: TrainFront,
-      active:
+      enabled:
         profile?.preferred_metro ??
-        false,
+        true,
     },
     {
       label: "Bus",
       icon: Bus,
-      active:
+      enabled:
         profile?.preferred_bus ??
-        false,
+        true,
     },
     {
       label: "Vélo",
       icon: Bike,
-      active:
+      enabled:
         profile?.preferred_bike ??
-        false,
+        true,
     },
     {
       label: "Marche",
       icon: Footprints,
-      active:
+      enabled:
         profile?.preferred_walk ??
         false,
     },
@@ -163,39 +165,36 @@ export default async function ProfilPage() {
 
   return (
     <main className="min-h-screen bg-background pb-28">
-
       <div className="mx-auto w-full max-w-[430px] px-5 pt-7">
 
-        {/* Header */}
         <header>
-
           <p className="uf-body text-muted">
-            Votre espace personnel
+            Votre espace
           </p>
 
           <h1 className="uf-h2 mt-1 text-secondary">
             Profil
           </h1>
-
         </header>
 
-        {/* Carte utilisateur */}
+        {/* Profil utilisateur */}
         <section className="uf-card mt-6 p-5">
 
           <div className="flex items-center gap-4">
 
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-primary text-xl font-bold text-white">
-              {initial}
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+              <UserRound
+                size={23}
+              />
             </div>
 
             <div className="min-w-0 flex-1">
 
               <p className="text-lg font-bold text-secondary">
-                {firstName}{" "}
-                {lastName}
+                {fullName}
               </p>
 
-              <div className="mt-1 flex items-center gap-1.5 text-muted">
+              <div className="mt-1 flex items-center gap-2 text-muted">
 
                 <Mail
                   size={14}
@@ -206,82 +205,6 @@ export default async function ProfilPage() {
                 </p>
 
               </div>
-
-              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-primary-soft px-3 py-1 text-primary">
-
-                <Leaf
-                  size={13}
-                />
-
-                <span className="uf-caption font-semibold">
-                  Éco voyageur
-                </span>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </section>
-
-        {/* Statistiques */}
-        <section className="mt-5 grid grid-cols-3 gap-3">
-
-          <div className="uf-card px-2 py-4 text-center">
-
-            <p className="text-lg font-bold text-secondary">
-              {validatedJourneys}
-            </p>
-
-            <p className="uf-caption mt-1 text-muted">
-              Trajets
-            </p>
-
-          </div>
-
-          <div className="uf-card px-2 py-4 text-center">
-
-            <p className="text-lg font-bold text-primary">
-              {co2Saved.toFixed(
-                2
-              )}
-            </p>
-
-            <p className="uf-caption mt-1 text-muted">
-              kg CO₂
-            </p>
-
-          </div>
-
-          <div className="uf-card px-2 py-4 text-center">
-
-            <p className="text-lg font-bold text-secondary">
-              {flows}
-            </p>
-
-            <p className="uf-caption mt-1 text-muted">
-              FLOWS
-            </p>
-
-          </div>
-
-        </section>
-
-        {/* Préférences mobilité */}
-        <section className="mt-8">
-
-          <div className="flex items-center justify-between">
-
-            <div>
-
-              <h2 className="uf-h3 text-secondary">
-                Vos préférences
-              </h2>
-
-              <p className="uf-caption mt-1 text-muted">
-                Modes privilégiés pour vos trajets
-              </p>
 
             </div>
 
@@ -294,49 +217,126 @@ export default async function ProfilPage() {
 
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
+        </section>
 
-            {mobilityPreferences.map(
+        {/* Statistiques */}
+        <section className="mt-6 grid grid-cols-3 gap-3">
+
+          <article className="uf-card p-4">
+
+            <Leaf
+              size={18}
+              className="text-primary"
+            />
+
+            <p className="mt-3 text-lg font-bold text-secondary">
+              {co2Saved.toFixed(1)}
+            </p>
+
+            <p className="uf-caption mt-1 text-muted">
+              kg CO₂
+            </p>
+
+          </article>
+
+          <article className="uf-card p-4">
+
+            <div className="flex h-[18px] items-center">
+              <span className="text-lg text-secondary">
+                ✦
+              </span>
+            </div>
+
+            <p className="mt-3 text-lg font-bold text-secondary">
+              {flows}
+            </p>
+
+            <p className="uf-caption mt-1 text-muted">
+              FLOWS
+            </p>
+
+          </article>
+
+          <article className="uf-card p-4">
+
+            <TrainFront
+              size={18}
+              className="text-primary"
+            />
+
+            <p className="mt-3 text-lg font-bold text-secondary">
+              {validatedJourneys}
+            </p>
+
+            <p className="uf-caption mt-1 text-muted">
+              trajets
+            </p>
+
+          </article>
+
+        </section>
+
+        {/* Préférences mobilité */}
+        <section className="mt-8">
+
+          <div className="flex items-center justify-between">
+
+            <h2 className="uf-h3 text-secondary">
+              Préférences de mobilité
+            </h2>
+
+            <Link
+              href="/profil/modifier"
+              className="uf-caption font-semibold text-primary"
+            >
+              Modifier
+            </Link>
+
+          </div>
+
+          <div className="uf-card mt-4 grid grid-cols-2 gap-3 p-4">
+
+            {preferences.map(
               ({
                 label,
                 icon: Icon,
-                active,
+                enabled,
               }) => (
                 <div
                   key={label}
-                  className={`flex items-center gap-3 rounded-[18px] border p-3 ${
-                    active
-                      ? "border-primary bg-primary-soft"
-                      : "border-border bg-surface"
+                  className={`flex items-center gap-3 rounded-[16px] border p-3 ${
+                    enabled
+                      ? "border-primary/20 bg-primary-soft"
+                      : "border-border bg-background"
                   }`}
                 >
 
                   <div
                     className={`flex h-9 w-9 items-center justify-center rounded-full ${
-                      active
+                      enabled
                         ? "bg-primary text-white"
-                        : "bg-background text-subtle"
+                        : "bg-surface text-muted"
                     }`}
                   >
                     <Icon
-                      size={17}
+                      size={16}
                     />
                   </div>
 
                   <div>
 
-                    <p
-                      className={`uf-label ${
-                        active
-                          ? "text-primary"
-                          : "text-secondary"
-                      }`}
-                    >
+                    <p className="uf-caption font-semibold text-secondary">
                       {label}
                     </p>
 
-                    <p className="uf-caption mt-0.5 text-muted">
-                      {active
+                    <p
+                      className={`mt-1 text-[11px] ${
+                        enabled
+                          ? "text-primary"
+                          : "text-subtle"
+                      }`}
+                    >
+                      {enabled
                         ? "Activé"
                         : "Désactivé"}
                     </p>
@@ -352,79 +352,16 @@ export default async function ProfilPage() {
         </section>
 
         {/* Lieux enregistrés */}
-        <section className="mt-8">
+        <SavedPlaces
+          homeAddress={
+            profile?.home_address
+          }
+          workAddress={
+            profile?.work_address
+          }
+        />
 
-          <h2 className="uf-h3 text-secondary">
-            Lieux enregistrés
-          </h2>
-
-          <div className="uf-card mt-4 overflow-hidden">
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 border-b border-border p-4 text-left"
-            >
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary-soft text-secondary">
-                <MapPin
-                  size={18}
-                />
-              </div>
-
-              <div className="flex-1">
-
-                <p className="uf-label text-secondary">
-                  Maison
-                </p>
-
-                <p className="uf-caption mt-1 text-muted">
-                  Aucune adresse enregistrée
-                </p>
-
-              </div>
-
-              <ChevronRight
-                size={18}
-                className="text-subtle"
-              />
-
-            </button>
-
-            <button
-              type="button"
-              className="flex w-full items-center gap-3 p-4 text-left"
-            >
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
-                <MapPin
-                  size={18}
-                />
-              </div>
-
-              <div className="flex-1">
-
-                <p className="uf-label text-secondary">
-                  Travail
-                </p>
-
-                <p className="uf-caption mt-1 text-muted">
-                  Aucune adresse enregistrée
-                </p>
-
-              </div>
-
-              <ChevronRight
-                size={18}
-                className="text-subtle"
-              />
-
-            </button>
-
-          </div>
-
-        </section>
-
-        {/* Compte */}
+        {/* Paramètres du compte */}
         <section className="mt-8">
 
           <h2 className="uf-h3 text-secondary">
@@ -445,7 +382,7 @@ export default async function ProfilPage() {
                 <Link
                   key={label}
                   href={href}
-                  className={`flex w-full items-center gap-3 p-4 text-left ${
+                  className={`flex items-center gap-4 p-4 ${
                     index !==
                     settings.length -
                       1
@@ -454,15 +391,15 @@ export default async function ProfilPage() {
                   }`}
                 >
 
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-background text-secondary">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
                     <Icon
-                      size={17}
+                      size={18}
                     />
                   </div>
 
-                  <span className="uf-label flex-1 text-secondary">
+                  <p className="uf-label flex-1 text-secondary">
                     {label}
-                  </span>
+                  </p>
 
                   <ChevronRight
                     size={18}
@@ -477,21 +414,13 @@ export default async function ProfilPage() {
 
         </section>
 
-        {/* Déconnexion */}
-        <section className="mb-4 mt-8">
-
+        <div className="mt-8">
           <LogoutButton />
-
-          <p className="uf-caption mt-4 text-center text-subtle">
-            UrbanFlow Mobility • Version 1.0
-          </p>
-
-        </section>
+        </div>
 
       </div>
 
       <BottomNavigation />
-
     </main>
   );
 }

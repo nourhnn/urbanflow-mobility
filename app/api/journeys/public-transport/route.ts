@@ -1,207 +1,443 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 type TransitMode =
+  | "all"
   | "metro"
   | "bus"
   | "tram"
   | "train";
 
-function normalize(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
+type Coordinates = {
+  lat: number;
+  lng: number;
+};
 
-function getSectionTransitMode(
-  section: any
-): TransitMode | null {
-  const display =
-    section.display_informations;
+type RequestBody = {
+  origin: Coordinates;
+  destination: Coordinates;
+  mode?: TransitMode;
+};
 
-  const values = normalize(
-    [
-      display?.physical_mode,
-      display?.commercial_mode,
-      display?.name,
-      display?.label,
-      display?.code,
-      section.mode,
-    ]
-      .filter(Boolean)
-      .join(" ")
-  );
-
-  if (values.includes("metro")) {
-    return "metro";
-  }
-
-  if (
-    values.includes("tram") ||
-    values.includes("tramway")
-  ) {
-    return "tram";
-  }
-
-  if (
-    values.includes("bus") ||
-    values.includes("coach")
-  ) {
-    return "bus";
-  }
-
-  if (
-    values.includes("rer") ||
-    values.includes("train") ||
-    values.includes("rail") ||
-    values.includes("transilien") ||
-    values.includes("rapid transit") ||
-    values.includes("rapidtransit")
-  ) {
-    return "train";
-  }
-
-  return null;
-}
-
-function journeyMatchesModes(
-  journey: any,
-  allowedModes: TransitMode[]
+function toRadians(
+  value: number
 ) {
-  if (allowedModes.length === 0) {
-    return true;
-  }
+  return (
+    value *
+    Math.PI /
+    180
+  );
+}
 
-  const sections =
-    journey.sections ?? [];
+function calculateDistanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+) {
+  const earthRadius =
+    6_371_000;
 
-  const transitModes =
-    sections
-      .map(
-        (
-          section: any
-        ) =>
-          getSectionTransitMode(
-            section
-          )
+  const dLat =
+    toRadians(
+      lat2 - lat1
+    );
+
+  const dLng =
+    toRadians(
+      lng2 - lng1
+    );
+
+  const a =
+    Math.sin(
+      dLat / 2
+    ) ** 2 +
+    Math.cos(
+      toRadians(
+        lat1
       )
-      .filter(
-        (
-          mode: TransitMode | null
-        ): mode is TransitMode =>
-          mode !== null
+    ) *
+      Math.cos(
+        toRadians(
+          lat2
+        )
+      ) *
+      Math.sin(
+        dLng / 2
+      ) ** 2;
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(
+        1 - a
+      )
+    );
+
+  return (
+    earthRadius *
+    c
+  );
+}
+
+function normalizeSection(
+  section: any
+) {
+  let distanceMeters = 0;
+
+  if (
+    typeof section.length ===
+    "number"
+  ) {
+    distanceMeters =
+      section.length;
+  } else if (
+    typeof section
+      .street_network
+      ?.length ===
+    "number"
+  ) {
+    distanceMeters =
+      section.street_network.length;
+  } else {
+    const fromLat =
+      Number(
+        section.from
+          ?.stop_point
+          ?.coord?.lat ??
+          section.from
+            ?.coord?.lat
       );
 
-  if (
-    transitModes.length === 0
-  ) {
-    return false;
+    const fromLng =
+      Number(
+        section.from
+          ?.stop_point
+          ?.coord?.lon ??
+          section.from
+            ?.coord?.lon
+      );
+
+    const toLat =
+      Number(
+        section.to
+          ?.stop_point
+          ?.coord?.lat ??
+          section.to
+            ?.coord?.lat
+      );
+
+    const toLng =
+      Number(
+        section.to
+          ?.stop_point
+          ?.coord?.lon ??
+          section.to
+            ?.coord?.lon
+      );
+
+    if (
+      Number.isFinite(
+        fromLat
+      ) &&
+      Number.isFinite(
+        fromLng
+      ) &&
+      Number.isFinite(
+        toLat
+      ) &&
+      Number.isFinite(
+        toLng
+      )
+    ) {
+      distanceMeters =
+        calculateDistanceMeters(
+          fromLat,
+          fromLng,
+          toLat,
+          toLng
+        );
+    }
   }
 
-  return transitModes.every(
-    (mode) =>
-      allowedModes.includes(mode)
-  );
+  return {
+    type:
+      section.type ??
+      null,
+
+    mode:
+      section.mode ??
+      section
+        .street_network
+        ?.mode ??
+      null,
+
+    physicalMode:
+      section
+        .display_informations
+        ?.physical_mode ??
+      null,
+
+    commercialMode:
+      section
+        .display_informations
+        ?.commercial_mode ??
+      null,
+
+    line:
+      section
+        .display_informations
+        ?.code ??
+      null,
+
+    lineName:
+      section
+        .display_informations
+        ?.name ??
+      null,
+
+    direction:
+      section
+        .display_informations
+        ?.direction ??
+      null,
+
+    duration:
+      Number(
+        section.duration ??
+          0
+      ),
+
+    distanceMeters:
+      Math.round(
+        distanceMeters
+      ),
+
+    from:
+      section.from
+        ?.name ??
+      null,
+
+    to:
+      section.to
+        ?.name ??
+      null,
+  };
 }
 
-export async function GET(
+function normalizeJourney(
+  journey: any
+) {
+  return {
+    duration:
+      Number(
+        journey.duration ??
+          0
+      ),
+
+    departureDateTime:
+      journey.departure_date_time ??
+      null,
+
+    arrivalDateTime:
+      journey.arrival_date_time ??
+      null,
+
+    transfers:
+      Number(
+        journey.nb_transfers ??
+          0
+      ),
+
+    walkingDuration:
+      Number(
+        journey.durations
+          ?.walking ??
+          0
+      ),
+
+    sections:
+      Array.isArray(
+        journey.sections
+      )
+        ? journey.sections.map(
+            normalizeSection
+          )
+        : [],
+  };
+}
+
+export async function POST(
   request: NextRequest
 ) {
-  const apiKey =
-    process.env.IDFM_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Clé API IDFM manquante.",
-      },
-      {
-        status: 500,
-      }
-    );
-  }
-
-  const searchParams =
-    request.nextUrl.searchParams;
-
-  const from =
-    searchParams.get("from");
-
-  const to =
-    searchParams.get("to");
-
-  const modesParam =
-    searchParams.get("modes");
-
-  if (!from || !to) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Les paramètres from et to sont obligatoires.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
-
-  const validModes: TransitMode[] =
-    [
-      "metro",
-      "bus",
-      "tram",
-      "train",
-    ];
-
-  let allowedModes: TransitMode[] =
-    [...validModes];
-
-  if (modesParam) {
-    allowedModes =
-      modesParam
-        .split(",")
-        .filter(
-          (
-            mode
-          ): mode is TransitMode =>
-            validModes.includes(
-              mode as TransitMode
-            )
-        );
-  }
-
-  const params =
-    new URLSearchParams({
-      from,
-      to,
-      count: "20",
-    });
-
-  const url =
-    `https://prim.iledefrance-mobilites.fr/marketplace/v2/navitia/journeys?${params.toString()}`;
-
   try {
-    const response =
-      await fetch(url, {
-        method: "GET",
+    const apiKey =
+      process.env.IDFM_API_KEY;
 
-        headers: {
-          Accept:
-            "application/json",
-
-          apikey:
-            apiKey,
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          error:
+            "La clé API Île-de-France Mobilités est manquante.",
         },
+        {
+          status: 500,
+        }
+      );
+    }
 
-        cache:
-          "no-store",
-      });
+    let body: RequestBody;
+
+    try {
+      body =
+        await request.json();
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            "Corps de requête invalide.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const {
+      origin,
+      destination,
+      mode = "all",
+    } = body;
+
+    if (
+      typeof origin?.lat !==
+        "number" ||
+      typeof origin?.lng !==
+        "number" ||
+      typeof destination?.lat !==
+        "number" ||
+      typeof destination?.lng !==
+        "number"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Coordonnées de départ ou de destination invalides.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const url =
+      new URL(
+        "https://prim.iledefrance-mobilites.fr/marketplace/v2/navitia/journeys"
+      );
+
+    url.searchParams.set(
+      "from",
+      `${origin.lng};${origin.lat}`
+    );
+
+    url.searchParams.set(
+      "to",
+      `${destination.lng};${destination.lat}`
+    );
+
+    /*
+     * On laisse PRIM/Navitia
+     * calculer tous les modes
+     * lorsqu'on est sur "all".
+     *
+     * Le filtrage précis des modes
+     * peut rester géré par ton
+     * fonctionnement existant.
+     */
+    if (mode !== "all") {
+      url.searchParams.set(
+        "first_section_mode[]",
+        "walking"
+      );
+
+      url.searchParams.set(
+        "last_section_mode[]",
+        "walking"
+      );
+
+      if (mode === "metro") {
+        url.searchParams.append(
+          "allowed_id[]",
+          "physical_mode:Metro"
+        );
+      }
+
+      if (mode === "bus") {
+        url.searchParams.append(
+          "allowed_id[]",
+          "physical_mode:Bus"
+        );
+      }
+
+      if (mode === "tram") {
+        url.searchParams.append(
+          "allowed_id[]",
+          "physical_mode:Tramway"
+        );
+      }
+
+      if (mode === "train") {
+        url.searchParams.append(
+          "allowed_id[]",
+          "physical_mode:Train"
+        );
+      }
+    }
+
+    const response =
+      await fetch(
+        url.toString(),
+        {
+          method: "GET",
+
+          headers: {
+            Accept:
+              "application/json",
+
+            apikey:
+              apiKey,
+          },
+
+          cache:
+            "no-store",
+        }
+      );
 
     const raw =
       await response.text();
+
+    if (!raw) {
+      console.error(
+        "Réponse PRIM vide :",
+        response.status
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            `Île-de-France Mobilités a renvoyé une réponse vide (${response.status}).`,
+        },
+        {
+          status:
+            response.ok
+              ? 502
+              : response.status,
+        }
+      );
+    }
 
     let data: any;
 
@@ -209,22 +445,15 @@ export async function GET(
       data =
         JSON.parse(raw);
     } catch {
-      data = raw;
-    }
+      console.error(
+        "Réponse PRIM non JSON :",
+        raw
+      );
 
-    if (!response.ok) {
       return NextResponse.json(
         {
-          success: false,
-
           error:
-            "Erreur lors de l'appel à Île-de-France Mobilités.",
-
-          primStatus:
-            response.status,
-
-          details:
-            data,
+            "La réponse du service Île-de-France Mobilités est invalide.",
         },
         {
           status: 502,
@@ -232,155 +461,54 @@ export async function GET(
       );
     }
 
+    if (!response.ok) {
+      console.error(
+        "Erreur PRIM :",
+        response.status,
+        data
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            data?.message ??
+            data?.error?.message ??
+            "Erreur du service Île-de-France Mobilités.",
+        },
+        {
+          status:
+            response.status,
+        }
+      );
+    }
+
     const journeys =
-      data?.journeys ?? [];
-
-    const filteredJourneys =
-      journeys.filter(
-        (journey: any) =>
-          journeyMatchesModes(
-            journey,
-            allowedModes
+      Array.isArray(
+        data.journeys
+      )
+        ? data.journeys.map(
+            normalizeJourney
           )
-      );
+        : [];
 
-    /*
-     * On normalise ici les données utiles
-     * pour UrbanFlow.
-     */
-    const normalizedJourneys =
-      filteredJourneys.map(
-        (journey: any) => ({
-          duration:
-            journey.duration ?? 0,
-
-          departureDateTime:
-            journey.departure_date_time ??
-            null,
-
-          arrivalDateTime:
-            journey.arrival_date_time ??
-            null,
-
-          transfers:
-            journey.nb_transfers ?? 0,
-
-          walkingDuration:
-            journey.durations?.walking ??
-            0,
-
-          sections:
-            (
-              journey.sections ??
-              []
-            ).map(
-              (
-                section: any
-              ) => {
-                const display =
-                  section.display_informations;
-
-                return {
-                  type:
-                    section.type ??
-                    null,
-
-                  mode:
-                    section.mode ??
-                    null,
-
-                  physicalMode:
-                    display?.physical_mode ??
-                    null,
-
-                  commercialMode:
-                    display?.commercial_mode ??
-                    null,
-
-                  line:
-                    display?.label ??
-                    display?.code ??
-                    null,
-
-                  lineName:
-                    display?.name ??
-                    null,
-
-                  direction:
-                    display?.direction ??
-                    null,
-
-                  duration:
-                    section.duration ??
-                    0,
-
-                  /*
-                   * Distance de la section.
-                   *
-                   * Navitia renvoie selon les
-                   * sections length et/ou
-                   * street_network.length.
-                   */
-                  distanceMeters:
-                    typeof section.length ===
-                    "number"
-                      ? section.length
-                      : typeof section
-                            .street_network
-                            ?.length ===
-                          "number"
-                        ? section
-                            .street_network
-                            .length
-                        : 0,
-
-                  from:
-                    section.from?.name ??
-                    section.from
-                      ?.stop_point
-                      ?.name ??
-                    null,
-
-                  to:
-                    section.to?.name ??
-                    section.to
-                      ?.stop_point
-                      ?.name ??
-                    null,
-                };
-              }
-            ),
-        })
-      );
-
-    return NextResponse.json({
-      success: true,
-
-      allowedModes,
-
-      count:
-        normalizedJourneys.length,
-
-      journeys:
-        normalizedJourneys,
-    });
+    return NextResponse.json(
+      {
+        journeys,
+      },
+      {
+        status: 200,
+      }
+    );
   } catch (error) {
     console.error(
-      "Erreur appel PRIM :",
+      "Erreur API transports :",
       error
     );
 
     return NextResponse.json(
       {
-        success: false,
-
         error:
-          "Impossible de contacter Île-de-France Mobilités.",
-
-        details:
-          error instanceof Error
-            ? error.message
-            : "Erreur inconnue",
+          "Impossible de récupérer les transports en commun.",
       },
       {
         status: 500,

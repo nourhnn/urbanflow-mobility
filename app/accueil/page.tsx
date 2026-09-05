@@ -1,8 +1,7 @@
 import {
-  ArrowRight,
   Bike,
   Bus,
-  Car,
+  ChevronRight,
   Footprints,
   Leaf,
   MapPin,
@@ -14,324 +13,355 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import BottomNavigation from "@/components/layout/BottomNavigation";
+import SavedPlaces from "@/components/profile/SavedPlaces";
 import { createClient } from "@/lib/supabase/server";
 
+type RecentJourney = {
+  id: string;
+  transport_mode: string;
+  destination_name: string | null;
+  distance_meters: number | null;
+  flows_earned: number | null;
+  co2_saved: number | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+function formatDistance(
+  meters: number | null
+) {
+  const value =
+    Number(meters ?? 0);
+
+  if (value < 1000) {
+    return `${Math.round(value)} m`;
+  }
+
+  return `${(
+    value / 1000
+  ).toFixed(1)} km`;
+}
+
+function formatDate(
+  value:
+    | string
+    | null
+) {
+  if (!value) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(
+    "fr-FR",
+    {
+      day: "numeric",
+      month: "short",
+    }
+  ).format(
+    new Date(value)
+  );
+}
+
+function getModeDetails(
+  mode: string
+) {
+  switch (mode) {
+    case "walking":
+      return {
+        label: "Marche",
+        icon: Footprints,
+      };
+
+    case "cycling":
+      return {
+        label: "Vélo",
+        icon: Bike,
+      };
+
+    case "driving":
+      return {
+        label: "Voiture",
+        icon: MapPin,
+      };
+
+    case "metro":
+      return {
+        label: "Métro",
+        icon: TrainFront,
+      };
+
+    case "bus":
+      return {
+        label: "Bus",
+        icon: Bus,
+      };
+
+    case "tram":
+    case "train":
+    case "transit":
+    case "multimodal":
+      return {
+        label:
+          "Transports",
+        icon: TrainFront,
+      };
+
+    default:
+      return {
+        label: "Trajet",
+        icon: MapPin,
+      };
+  }
+}
+
 export default async function AccueilPage() {
-  const supabase = await createClient();
+  const supabase =
+    await createClient();
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } =
+    await supabase.auth.getUser();
 
   if (!user) {
     redirect("/connexion");
   }
 
-  const {
-    data: profile,
-    error: profileError,
-  } = await supabase
-    .from("profiles")
-    .select(`
-      first_name,
-      flows,
-      co2_saved
-    `)
-    .eq("id", user.id)
-    .single();
+  const [
+    profileResult,
+    rewardedJourneysResult,
+    recentJourneysResult,
+  ] =
+    await Promise.all([
+      supabase
+        .from("profiles")
+        .select(`
+          first_name,
+          flows,
+          co2_saved,
+          home_address,
+          work_address
+        `)
+        .eq("id", user.id)
+        .single(),
 
-  if (profileError) {
-    console.error(
-      "Erreur chargement profil :",
-      profileError
-    );
-  }
+      supabase
+        .from("journeys")
+        .select(
+          "id",
+          {
+            count:
+              "exact",
+            head:
+              true,
+          }
+        )
+        .eq(
+          "user_id",
+          user.id
+        )
+        .eq(
+          "status",
+          "rewarded"
+        ),
 
-  const {
-    count: rewardedJourneysCount,
-    error: journeysCountError,
-  } = await supabase
-    .from("journeys")
-    .select("id", {
-      count: "exact",
-      head: true,
-    })
-    .eq("user_id", user.id)
-    .eq("status", "rewarded");
+      supabase
+        .from("journeys")
+        .select(`
+          id,
+          transport_mode,
+          destination_name,
+          distance_meters,
+          flows_earned,
+          co2_saved,
+          completed_at,
+          created_at
+        `)
+        .eq(
+          "user_id",
+          user.id
+        )
+        .eq(
+          "status",
+          "rewarded"
+        )
+        .order(
+          "completed_at",
+          {
+            ascending:
+              false,
+          }
+        )
+        .limit(3),
+    ]);
 
-  if (journeysCountError) {
-    console.error(
-      "Erreur comptage trajets :",
-      journeysCountError
-    );
-  }
+  const profile =
+    profileResult.data;
 
-  const {
-    data: recentJourneys,
-    error: recentJourneysError,
-  } = await supabase
-    .from("journeys")
-    .select(`
-      id,
-      transport_mode,
-      destination_name,
-      distance_meters,
-      flows_earned,
-      co2_saved,
-      completed_at,
-      created_at
-    `)
-    .eq("user_id", user.id)
-    .eq("status", "rewarded")
-    .order("completed_at", {
-      ascending: false,
-    })
-    .limit(3);
+  const validatedJourneys =
+    rewardedJourneysResult.count ??
+    0;
 
-  if (recentJourneysError) {
-    console.error(
-      "Erreur chargement trajets récents :",
-      recentJourneysError
-    );
-  }
+  const recentJourneys =
+    (recentJourneysResult.data ??
+      []) as RecentJourney[];
 
   const firstName =
-    profile?.first_name ??
-    user.user_metadata?.first_name ??
-    "Utilisateur";
+    profile?.first_name ||
+    user.user_metadata
+      ?.first_name ||
+    "";
 
-  const flows =
-    profile?.flows ?? 0;
+  const totalCO2Saved =
+    Number(
+      profile?.co2_saved ??
+        0
+    );
 
-  const co2Saved =
-    Number(profile?.co2_saved ?? 0);
-
-  const journeyCount =
-    rewardedJourneysCount ?? 0;
-
-  const transportModes = [
-    {
-      label: "Marche",
-      icon: Footprints,
-    },
-    {
-      label: "Vélo",
-      icon: Bike,
-    },
-    {
-      label: "Voiture",
-      icon: Car,
-    },
-    {
-      label: "Transports",
-      icon: Bus,
-    },
-  ];
-
-  function getModeLabel(
-    transportMode: string
-  ) {
-    const mode =
-      transportMode.toLowerCase();
-
-    if (mode === "walking") {
-      return "Marche";
-    }
-
-    if (mode === "cycling") {
-      return "Vélo";
-    }
-
-    if (mode === "driving") {
-      return "Voiture";
-    }
-
-    if (mode.includes(",")) {
-      return "Multimodal";
-    }
-
-    if (mode.includes("metro")) {
-      return "Métro";
-    }
-
-    if (mode.includes("bus")) {
-      return "Bus";
-    }
-
-    if (mode.includes("tram")) {
-      return "Tram";
-    }
-
-    if (
-      mode.includes("train") ||
-      mode.includes("rer")
-    ) {
-      return "Train / RER";
-    }
-
-    return "Transports";
-  }
-
-  function formatDistance(
-    meters: number | null
-  ) {
-    if (!meters) {
-      return "—";
-    }
-
-    if (meters < 1000) {
-      return `${Math.round(
-        meters
-      )} m`;
-    }
-
-    return `${(
-      meters / 1000
-    ).toFixed(1)} km`;
-  }
+  const totalFlows =
+    Number(
+      profile?.flows ??
+        0
+    );
 
   return (
     <main className="min-h-screen bg-background pb-28">
-
       <div className="mx-auto w-full max-w-[430px] px-5 pt-7">
 
         {/* Header */}
         <header>
 
           <p className="uf-body text-muted">
-            Bonjour {firstName} 👋
+            Bonjour
+            {firstName
+              ? ` ${firstName}`
+              : ""}
+            👋
           </p>
 
           <h1 className="uf-h2 mt-1 text-secondary">
-            Où allez-vous aujourd&apos;hui ?
+            Où allons-nous aujourd&apos;hui ?
           </h1>
 
         </header>
 
-        {/* Planifier */}
-        <section className="mt-6">
+        {/* Planifier un trajet */}
+        <Link
+          href="/trajets"
+          className="mt-6 block rounded-[24px] bg-primary p-5 text-white"
+        >
 
-          <Link
-            href="/trajets"
-            className="block rounded-[24px] bg-primary p-5 text-white shadow-sm transition active:scale-[0.99]"
-          >
+          <div className="flex items-start justify-between gap-5">
 
-            <div className="flex items-start justify-between gap-4">
+            <div>
 
-              <div>
+              <p className="text-sm font-medium opacity-80">
+                Planifier un trajet
+              </p>
 
-                <p className="text-sm font-medium text-white/75">
-                  Nouveau trajet
-                </p>
+              <h2 className="mt-2 text-xl font-bold">
+                Trouvez votre meilleur itinéraire
+              </h2>
 
-                <h2 className="mt-2 text-xl font-bold">
-                  Planifier un déplacement
-                </h2>
-
-                <p className="mt-2 max-w-[260px] text-sm leading-5 text-white/80">
-                  Comparez les modes de transport et choisissez l&apos;option la plus adaptée.
-                </p>
-
-              </div>
-
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15">
-                <MapPin size={21} />
-              </div>
+              <p className="mt-2 max-w-[260px] text-sm leading-5 opacity-80">
+                Comparez marche, vélo, voiture et transports en commun.
+              </p>
 
             </div>
 
-            <div className="mt-5 flex items-center gap-2 font-semibold">
-
-              Trouver un trajet
-
-              <ArrowRight size={17} />
-
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/15">
+              <MapPin
+                size={21}
+              />
             </div>
 
-          </Link>
-
-        </section>
-
-        {/* Statistiques */}
-        <section className="mt-5 grid grid-cols-3 gap-3">
-
-          <div className="uf-card px-3 py-4 text-center">
-
-            <p className="text-xl font-bold text-secondary">
-              {journeyCount}
-            </p>
-
-            <p className="uf-caption mt-1 text-muted">
-              Trajets
-            </p>
-
           </div>
 
-          <div className="uf-card px-3 py-4 text-center">
+          <div className="mt-5 flex items-center gap-2 text-sm font-semibold">
+            Rechercher un trajet
 
-            <p className="text-xl font-bold text-primary">
-              {co2Saved.toFixed(2)}
-            </p>
-
-            <p className="uf-caption mt-1 text-muted">
-              kg CO₂
-            </p>
-
+            <ChevronRight
+              size={17}
+            />
           </div>
 
-          <div className="uf-card px-3 py-4 text-center">
+        </Link>
 
-            <p className="text-xl font-bold text-secondary">
-              {flows}
-            </p>
+        {/* Lieux enregistrés */}
+        <SavedPlaces
+          homeAddress={
+            profile?.home_address
+          }
+          workAddress={
+            profile?.work_address
+          }
+          compact
+        />
 
-            <p className="uf-caption mt-1 text-muted">
-              FLOWS
-            </p>
-
-          </div>
-
-        </section>
-
-        {/* Modes */}
+        {/* Raccourcis transports */}
         <section className="mt-8">
 
-          <div>
-
-            <h2 className="uf-h3 text-secondary">
-              Se déplacer
-            </h2>
-
-            <p className="uf-caption mt-1 text-muted">
-              Choisissez votre mode préféré
-            </p>
-
-          </div>
+          <h2 className="uf-h3 text-secondary">
+            Se déplacer
+          </h2>
 
           <div className="mt-4 grid grid-cols-4 gap-2">
 
-            {transportModes.map(
-              ({
-                label,
-                icon: Icon,
-              }) => (
-                <Link
-                  key={label}
-                  href="/trajets"
-                  className="uf-card flex flex-col items-center justify-center px-2 py-4 text-center transition active:scale-[0.98]"
-                >
+            <Link
+              href="/trajets"
+              className="uf-card flex min-h-[86px] flex-col items-center justify-center gap-2 p-3 text-center"
+            >
+              <Footprints
+                size={20}
+                className="text-primary"
+              />
 
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
-                    <Icon size={18} />
-                  </div>
+              <span className="text-xs font-semibold text-secondary">
+                Marche
+              </span>
+            </Link>
 
-                  <span className="uf-caption mt-2 font-medium text-secondary">
-                    {label}
-                  </span>
+            <Link
+              href="/trajets"
+              className="uf-card flex min-h-[86px] flex-col items-center justify-center gap-2 p-3 text-center"
+            >
+              <Bike
+                size={20}
+                className="text-primary"
+              />
 
-                </Link>
-              )
-            )}
+              <span className="text-xs font-semibold text-secondary">
+                Vélo
+              </span>
+            </Link>
+
+            <Link
+              href="/trajets"
+              className="uf-card flex min-h-[86px] flex-col items-center justify-center gap-2 p-3 text-center"
+            >
+              <Bus
+                size={20}
+                className="text-primary"
+              />
+
+              <span className="text-xs font-semibold text-secondary">
+                Bus
+              </span>
+            </Link>
+
+            <Link
+              href="/trajets"
+              className="uf-card flex min-h-[86px] flex-col items-center justify-center gap-2 p-3 text-center"
+            >
+              <TrainFront
+                size={20}
+                className="text-primary"
+              />
+
+              <span className="text-xs font-semibold text-secondary">
+                Métro
+              </span>
+            </Link>
 
           </div>
 
@@ -340,71 +370,82 @@ export default async function AccueilPage() {
         {/* Impact */}
         <section className="mt-8">
 
-          <h2 className="uf-h3 text-secondary">
-            Votre impact
-          </h2>
+          <div className="flex items-center justify-between">
 
-          <div className="uf-card mt-4 p-5">
+            <h2 className="uf-h3 text-secondary">
+              Votre impact
+            </h2>
 
-            <div className="flex items-center gap-3">
+            <Link
+              href="/recompenses"
+              className="uf-caption font-semibold text-primary"
+            >
+              Voir plus
+            </Link>
 
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary">
-                <Leaf size={20} />
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-3">
+
+            <article className="uf-card p-4">
+
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-soft text-primary">
+                <Leaf
+                  size={17}
+                />
               </div>
 
-              <div>
+              <p className="mt-3 text-lg font-bold text-secondary">
+                {totalCO2Saved.toFixed(
+                  1
+                )}
+              </p>
 
-                <p className="uf-label text-secondary">
-                  Continuez comme ça
-                </p>
+              <p className="uf-caption mt-1 text-muted">
+                kg CO₂
+              </p>
 
-                <p className="uf-caption mt-1 text-muted">
-                  Chaque trajet responsable contribue à réduire votre impact carbone.
-                </p>
+            </article>
 
+            <article className="uf-card p-4">
+
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary-soft text-secondary">
+                <Sparkles
+                  size={17}
+                />
               </div>
 
-            </div>
+              <p className="mt-3 text-lg font-bold text-secondary">
+                {
+                  totalFlows
+                }
+              </p>
 
-            <div className="mt-5 grid grid-cols-3 gap-2">
+              <p className="uf-caption mt-1 text-muted">
+                FLOWS
+              </p>
 
-              <div className="rounded-[16px] bg-background p-3">
+            </article>
 
-                <p className="uf-caption text-muted">
-                  Trajets
-                </p>
+            <article className="uf-card p-4">
 
-                <p className="uf-label mt-1 text-secondary">
-                  {journeyCount}
-                </p>
-
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-soft text-primary">
+                <MapPin
+                  size={17}
+                />
               </div>
 
-              <div className="rounded-[16px] bg-background p-3">
+              <p className="mt-3 text-lg font-bold text-secondary">
+                {
+                  validatedJourneys
+                }
+              </p>
 
-                <p className="uf-caption text-muted">
-                  CO₂
-                </p>
+              <p className="uf-caption mt-1 text-muted">
+                trajets
+              </p>
 
-                <p className="uf-label mt-1 text-primary">
-                  {co2Saved.toFixed(2)} kg
-                </p>
-
-              </div>
-
-              <div className="rounded-[16px] bg-background p-3">
-
-                <p className="uf-caption text-muted">
-                  FLOWS
-                </p>
-
-                <p className="uf-label mt-1 text-secondary">
-                  {flows}
-                </p>
-
-              </div>
-
-            </div>
+            </article>
 
           </div>
 
@@ -413,178 +454,127 @@ export default async function AccueilPage() {
         {/* Derniers trajets */}
         <section className="mt-8">
 
-          <div className="flex items-end justify-between">
+          <div className="flex items-center justify-between">
 
-            <div>
-
-              <h2 className="uf-h3 text-secondary">
-                Derniers trajets
-              </h2>
-
-              <p className="uf-caption mt-1 text-muted">
-                Vos déplacements récemment validés
-              </p>
-
-            </div>
+            <h2 className="uf-h3 text-secondary">
+              Derniers trajets
+            </h2>
 
             <Link
               href="/trajets"
               className="uf-caption font-semibold text-primary"
             >
-              Voir tout
+              Historique
             </Link>
 
           </div>
 
-          {!recentJourneys ||
-          recentJourneys.length === 0 ? (
-            <div className="uf-card mt-4 p-5 text-center">
-
-              <TrainFront
-                size={22}
-                className="mx-auto text-primary"
-              />
-
-              <p className="uf-label mt-3 text-secondary">
-                Aucun trajet validé
-              </p>
-
-              <p className="uf-caption mt-1 text-muted">
-                Vos derniers déplacements apparaîtront ici.
-              </p>
-
-            </div>
-          ) : (
+          {recentJourneys.length >
+          0 ? (
             <div className="mt-4 space-y-3">
 
               {recentJourneys.map(
-                (journey) => (
-                  <div
-                    key={journey.id}
-                    className="uf-card p-4"
-                  >
+                (
+                  journey
+                ) => {
+                  const {
+                    label,
+                    icon:
+                      Icon,
+                  } =
+                    getModeDetails(
+                      journey.transport_mode
+                    );
 
-                    <div className="flex items-center justify-between gap-3">
+                  return (
+                    <article
+                      key={
+                        journey.id
+                      }
+                      className="uf-card flex items-center gap-4 p-4"
+                    >
 
-                      <div className="min-w-0">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+                        <Icon
+                          size={
+                            18
+                          }
+                        />
+                      </div>
 
-                        <p className="uf-label text-secondary">
-                          {getModeLabel(
-                            journey.transport_mode
-                          )}
+                      <div className="min-w-0 flex-1">
+
+                        <p className="truncate text-sm font-semibold text-secondary">
+                          {journey.destination_name ||
+                            "Trajet UrbanFlow"}
                         </p>
 
-                        <p className="uf-caption mt-1 truncate text-muted">
-                          {journey.destination_name ??
-                            "Destination"}
+                        <p className="uf-caption mt-1 text-muted">
+                          {label}
+                          {" • "}
+                          {formatDistance(
+                            journey.distance_meters
+                          )}
+                          {" • "}
+                          {formatDate(
+                            journey.completed_at ||
+                              journey.created_at
+                          )}
                         </p>
 
                       </div>
 
                       <div className="text-right">
 
-                        <p className="uf-caption text-muted">
-                          {formatDistance(
-                            journey.distance_meters
-                          )}
+                        <p className="text-xs font-semibold text-primary">
+                          +
+                          {journey.flows_earned ??
+                            0}{" "}
+                          FLOWS
                         </p>
 
-                        <div className="mt-1 flex items-center justify-end gap-1 text-primary">
-
-                          <Sparkles size={12} />
-
-                          <span className="uf-caption font-semibold">
-                            +{journey.flows_earned}
-                          </span>
-
-                        </div>
+                        <p className="uf-caption mt-1 text-muted">
+                          {Number(
+                            journey.co2_saved ??
+                              0
+                          ).toFixed(
+                            2
+                          )}{" "}
+                          kg
+                        </p>
 
                       </div>
 
-                    </div>
-
-                  </div>
-                )
+                    </article>
+                  );
+                }
               )}
+
+            </div>
+          ) : (
+            <div className="uf-card mt-4 p-5 text-center">
+
+              <MapPin
+                size={22}
+                className="mx-auto text-primary"
+              />
+
+              <p className="uf-label mt-3 text-secondary">
+                Aucun trajet pour le moment
+              </p>
+
+              <p className="uf-caption mt-1 text-muted">
+                Votre historique apparaîtra ici après votre premier trajet validé.
+              </p>
 
             </div>
           )}
 
         </section>
 
-        {/* Raccourcis */}
-        <section className="mt-8">
-
-          <h2 className="uf-h3 text-secondary">
-            Accès rapide
-          </h2>
-
-          <div className="mt-4 space-y-3">
-
-            <Link
-              href="/trajets"
-              className="uf-card flex items-center gap-3 p-4"
-            >
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
-                <TrainFront size={18} />
-              </div>
-
-              <div className="flex-1">
-
-                <p className="uf-label text-secondary">
-                  Mes trajets
-                </p>
-
-                <p className="uf-caption mt-1 text-muted">
-                  Planifier et consulter vos déplacements
-                </p>
-
-              </div>
-
-              <ArrowRight
-                size={17}
-                className="text-subtle"
-              />
-
-            </Link>
-
-            <Link
-              href="/recompenses"
-              className="uf-card flex items-center gap-3 p-4"
-            >
-
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary-soft text-secondary">
-                <Sparkles size={18} />
-              </div>
-
-              <div className="flex-1">
-
-                <p className="uf-label text-secondary">
-                  Mes récompenses
-                </p>
-
-                <p className="uf-caption mt-1 text-muted">
-                  {flows} FLOWS disponibles
-                </p>
-
-              </div>
-
-              <ArrowRight
-                size={17}
-                className="text-subtle"
-              />
-
-            </Link>
-
-          </div>
-
-        </section>
-
       </div>
 
       <BottomNavigation />
-
     </main>
   );
 }

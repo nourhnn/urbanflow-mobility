@@ -1,440 +1,320 @@
 "use client";
 
-import {
-  Bike,
-  Bus,
-  Footprints,
-  Home,
-  LoaderCircle,
-  MapPin,
-  Save,
-  TrainFront,
-} from "lucide-react";
-
 import Link from "next/link";
-import {
-  useEffect,
-  useState,
-} from "react";
+import { ArrowLeft, Bike, Bus, Footprints, TrainFront } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
 import { createClient } from "@/lib/supabase/client";
 
 type ProfileData = {
   first_name: string | null;
   last_name: string | null;
-
   preferred_metro: boolean;
   preferred_bus: boolean;
   preferred_bike: boolean;
   preferred_walk: boolean;
-
-  home_address: string | null;
-  work_address: string | null;
 };
 
 export default function ModifierProfilPage() {
   const router = useRouter();
 
-  const [loading, setLoading] =
-    useState(true);
-
-  const [saving, setSaving] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-  const [success, setSuccess] =
-    useState("");
-
-  const [firstName, setFirstName] =
-    useState("");
-
-  const [lastName, setLastName] =
-    useState("");
-
-  const [homeAddress, setHomeAddress] =
-    useState("");
-
-  const [workAddress, setWorkAddress] =
-    useState("");
-
-  const [
-    preferredMetro,
-    setPreferredMetro,
-  ] = useState(false);
-
-  const [
-    preferredBus,
-    setPreferredBus,
-  ] = useState(false);
-
-  const [
-    preferredBike,
-    setPreferredBike,
-  ] = useState(false);
-
-  const [
-    preferredWalk,
-    setPreferredWalk,
-  ] = useState(false);
+  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     async function loadProfile() {
-      const supabase =
-        createClient();
+      const supabase = createClient();
 
       const {
         data: { user },
-      } =
-        await supabase.auth.getUser();
+      } = await supabase.auth.getUser();
 
       if (!user) {
         router.push("/connexion");
         return;
       }
 
-      const {
-        data,
-        error,
-      } =
-        await supabase
-          .from("profiles")
-          .select(`
-            first_name,
-            last_name,
-            preferred_metro,
-            preferred_bus,
-            preferred_bike,
-            preferred_walk,
-            home_address,
-            work_address
-          `)
-          .eq("id", user.id)
-          .single();
+      const { data, error: profileError } = await supabase
+        .from("profiles")
+        .select(`
+          first_name,
+          last_name,
+          preferred_metro,
+          preferred_bus,
+          preferred_bike,
+          preferred_walk
+        `)
+        .eq("id", user.id)
+        .single();
 
-      if (error) {
-        console.error(
-          "Erreur profil :",
-          error
-        );
-
-        setError(
-          "Impossible de charger votre profil."
-        );
-
+      if (profileError) {
+        setError("Impossible de charger votre profil.");
         setLoading(false);
         return;
       }
 
-      const profile =
-        data as ProfileData;
-
-      setFirstName(
-        profile.first_name ??
-          ""
-      );
-
-      setLastName(
-        profile.last_name ??
-          ""
-      );
-
-      setPreferredMetro(
-        profile.preferred_metro
-      );
-
-      setPreferredBus(
-        profile.preferred_bus
-      );
-
-      setPreferredBike(
-        profile.preferred_bike
-      );
-
-      setPreferredWalk(
-        profile.preferred_walk
-      );
-
-      setHomeAddress(
-        profile.home_address ??
-          ""
-      );
-
-      setWorkAddress(
-        profile.work_address ??
-          ""
-      );
-
+      setProfile(data);
       setLoading(false);
     }
 
     loadProfile();
   }, [router]);
 
-  async function handleSave() {
-    setError("");
-    setSuccess("");
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-    if (!firstName.trim()) {
-      setError(
-        "Le prénom est obligatoire."
-      );
-
+    if (!profile) {
       return;
     }
 
+    setError("");
     setSaving(true);
 
-    try {
-      const supabase =
-        createClient();
+    const formData = new FormData(event.currentTarget);
 
-      const {
-        data: { user },
-      } =
-        await supabase.auth.getUser();
+    const firstName = String(formData.get("firstName") ?? "").trim();
+    const lastName = String(formData.get("lastName") ?? "").trim();
 
-      if (!user) {
-        router.push(
-          "/connexion"
-        );
-        return;
-      }
-
-      const {
-        error,
-      } =
-        await supabase
-          .from("profiles")
-          .update({
-            first_name:
-              firstName.trim(),
-
-            last_name:
-              lastName.trim(),
-
-            preferred_metro:
-              preferredMetro,
-
-            preferred_bus:
-              preferredBus,
-
-            preferred_bike:
-              preferredBike,
-
-            preferred_walk:
-              preferredWalk,
-
-            home_address:
-              homeAddress.trim() ||
-              null,
-
-            work_address:
-              workAddress.trim() ||
-              null,
-
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq(
-            "id",
-            user.id
-          );
-
-      if (error) {
-        throw error;
-      }
-
-      /*
-       * On garde également les
-       * métadonnées Auth synchronisées.
-       */
-      await supabase.auth.updateUser({
-        data: {
-          first_name:
-            firstName.trim(),
-
-          last_name:
-            lastName.trim(),
-        },
-      });
-
-      setSuccess(
-        "Votre profil a été mis à jour."
-      );
-
-      router.refresh();
-    } catch (error) {
-      console.error(
-        error
-      );
-
-      setError(
-        "Impossible d'enregistrer les modifications."
-      );
-    } finally {
+    if (!firstName || !lastName) {
+      setError("Le prénom et le nom sont obligatoires.");
       setSaving(false);
+      return;
     }
+
+    const supabase = createClient();
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      router.push("/connexion");
+      return;
+    }
+
+    const { error: updateError } = await supabase
+      .from("profiles")
+      .update({
+        first_name: firstName,
+        last_name: lastName,
+        preferred_metro: profile.preferred_metro,
+        preferred_bus: profile.preferred_bus,
+        preferred_bike: profile.preferred_bike,
+        preferred_walk: profile.preferred_walk,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+
+    if (updateError) {
+      setError("Une erreur est survenue pendant la mise à jour.");
+      setSaving(false);
+      return;
+    }
+
+    router.push("/profil");
+    router.refresh();
+  }
+
+  function togglePreference(
+    preference:
+      | "preferred_metro"
+      | "preferred_bus"
+      | "preferred_bike"
+      | "preferred_walk"
+  ) {
+    setProfile((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [preference]: !current[preference],
+      };
+    });
   }
 
   if (loading) {
     return (
       <main className="min-h-screen bg-background">
-        <div className="flex min-h-[70vh] items-center justify-center">
-
-          <LoaderCircle
-            className="animate-spin text-primary"
-            size={24}
-          />
-
+        <div className="mx-auto w-full max-w-[430px] px-6 py-8">
+          <p className="uf-body text-muted">
+            Chargement du profil...
+          </p>
         </div>
       </main>
     );
   }
 
-  const mobilityOptions = [
+  if (!profile) {
+    return (
+      <main className="min-h-screen bg-background">
+        <div className="mx-auto w-full max-w-[430px] px-6 py-8">
+          <p className="uf-body text-error">
+            Impossible de charger votre profil.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  const preferences = [
     {
       label: "Métro",
       icon: TrainFront,
-      active: preferredMetro,
-      toggle: () =>
-        setPreferredMetro(
-          (value) => !value
-        ),
+      key: "preferred_metro" as const,
+      active: profile.preferred_metro,
     },
     {
       label: "Bus",
       icon: Bus,
-      active: preferredBus,
-      toggle: () =>
-        setPreferredBus(
-          (value) => !value
-        ),
+      key: "preferred_bus" as const,
+      active: profile.preferred_bus,
     },
     {
       label: "Vélo",
       icon: Bike,
-      active: preferredBike,
-      toggle: () =>
-        setPreferredBike(
-          (value) => !value
-        ),
+      key: "preferred_bike" as const,
+      active: profile.preferred_bike,
     },
     {
       label: "Marche",
       icon: Footprints,
-      active: preferredWalk,
-      toggle: () =>
-        setPreferredWalk(
-          (value) => !value
-        ),
+      key: "preferred_walk" as const,
+      active: profile.preferred_walk,
     },
   ];
 
   return (
     <main className="min-h-screen bg-background">
+      <div className="mx-auto w-full max-w-[430px] px-6 pb-8 pt-6">
 
-      <div className="mx-auto w-full max-w-[430px] px-5 pb-10 pt-7">
-
-        <header>
-
+        {/* Header */}
+        <header className="relative flex items-center justify-center">
           <Link
             href="/profil"
-            className="uf-caption font-semibold text-primary"
+            aria-label="Retour"
+            className="absolute left-0 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-secondary"
           >
-            ← Retour au profil
+            <ArrowLeft size={20} />
           </Link>
 
-          <h1 className="uf-h2 mt-5 text-secondary">
-            Modifier mon profil
+          <h1 className="uf-h3 text-secondary">
+            Modifier le profil
           </h1>
-
-          <p className="uf-body mt-2 text-muted">
-            Gérez vos informations et vos préférences UrbanFlow.
-          </p>
-
         </header>
 
-        {/* Informations */}
-        <section className="mt-8">
+        <form
+          onSubmit={handleSubmit}
+          className="mt-8 space-y-8"
+        >
 
-          <h2 className="uf-h3 text-secondary">
-            Informations personnelles
-          </h2>
+          {/* Infos personnelles */}
+          <section>
+            <h2 className="uf-h3 text-secondary">
+              Informations personnelles
+            </h2>
 
-          <div className="uf-card mt-4 space-y-4 p-5">
-
-            <div>
-
-              <label
-                htmlFor="firstName"
-                className="uf-label text-secondary"
-              >
-                Prénom
-              </label>
-
-              <input
+            <div className="mt-4 space-y-5">
+              <Input
                 id="firstName"
-                value={firstName}
-                onChange={(event) =>
-                  setFirstName(
-                    event.target.value
-                  )
-                }
-                className="uf-input mt-2"
+                name="firstName"
+                label="Prénom"
+                defaultValue={profile.first_name ?? ""}
+                autoComplete="given-name"
+                required
               />
 
-            </div>
-
-            <div>
-
-              <label
-                htmlFor="lastName"
-                className="uf-label text-secondary"
-              >
-                Nom
-              </label>
-
-              <input
+              <Input
                 id="lastName"
-                value={lastName}
-                onChange={(event) =>
-                  setLastName(
-                    event.target.value
-                  )
-                }
-                className="uf-input mt-2"
+                name="lastName"
+                label="Nom"
+                defaultValue={profile.last_name ?? ""}
+                autoComplete="family-name"
+                required
               />
-
             </div>
+          </section>
 
-          </div>
+          {/* Préférences */}
+          <section>
+            <h2 className="uf-h3 text-secondary">
+              Préférences de mobilité
+            </h2>
 
-        </section>
+            <p className="uf-caption mt-1 text-muted">
+              Sélectionnez les modes que vous souhaitez privilégier.
+            </p>
 
-        {/* Mobilité */}
-        <section className="mt-8">
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              {preferences.map(
+                ({ label, icon: Icon, key, active }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => togglePreference(key)}
+                    className={`flex items-center gap-3 rounded-[18px] border p-3 text-left transition ${
+                      active
+                        ? "border-primary bg-primary-soft"
+                        : "border-border bg-surface"
+                    }`}
+                  >
+                    <div
+                      className={`flex h-9 w-9 items-center justify-center rounded-full ${
+                        active
+                          ? "bg-primary text-white"
+                          : "bg-background text-subtle"
+                      }`}
+                    >
+                      <Icon size={17} />
+                    </div>
 
-          <h2 className="uf-h3 text-secondary">
-            Préférences de mobilité
-          </h2>
+                    <div>
+                      <p
+                        className={`uf-label ${
+                          active
+                            ? "text-primary"
+                            : "text-secondary"
+                        }`}
+                      >
+                        {label}
+                      </p>
 
-          <p className="uf-caption mt-1 text-muted">
-            Sélectionnez vos modes de transport privilégiés.
-          </p>
+                      <p className="uf-caption mt-0.5 text-muted">
+                        {active ? "Activé" : "Désactivé"}
+                      </p>
+                    </div>
+                  </button>
+                )
+              )}
+            </div>
+          </section>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          {/* Erreur */}
+          {error && (
+            <div className="rounded-[14px] bg-error/10 px-4 py-3">
+              <p className="uf-body text-error">
+                {error}
+              </p>
+            </div>
+          )}
 
-            {mobilityOptions.map(
-              ({
-                label,
-                icon: Icon,
-                active,
-                toggle,
-              }) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={t
+          {/* Sauvegarde */}
+          <Button
+            type="submit"
+            disabled={saving}
+          >
+            {saving ? "Enregistrement..." : "Enregistrer les modifications"}
+          </Button>
+
+        </form>
+
+      </div>
+    </main>
+  );
+}

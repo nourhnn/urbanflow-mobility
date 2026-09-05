@@ -1,34 +1,35 @@
 "use client";
 
 import {
-  useCallback,
+  Bike,
+  Bus,
+  Car,
+  Check,
+  Clock3,
+  Footprints,
+  Leaf,
+  LoaderCircle,
+  LocateFixed,
+  MapPin,
+  Navigation,
+  RefreshCcw,
+  Sparkles,
+  TrainFront,
+} from "lucide-react";
+
+import { useSearchParams } from "next/navigation";
+
+import {
   useEffect,
   useMemo,
   useState,
 } from "react";
 
-import {
-  Bike,
-  Bus,
-  Car,
-  Check,
-  CheckCircle2,
-  Clock,
-  Footprints,
-  Leaf,
-  LoaderCircle,
-  MapPin,
-  RotateCcw,
-  SlidersHorizontal,
-  Sparkles,
-  TrainFront,
-  TramFront,
-} from "lucide-react";
-
 import UrbanFlowMap, {
-  type JourneyCoordinates,
-  type MapboxJourneyData,
-  type MapboxTravelMode,
+  JourneyCoordinates,
+  JourneyPoint,
+  MapboxJourneyData,
+  MapboxTravelMode,
 } from "@/components/map/UrbanFlowMap";
 
 import {
@@ -39,6 +40,23 @@ import {
 import { canUseLocation } from "@/lib/privacy/location";
 import { createClient } from "@/lib/supabase/client";
 
+type ModeId =
+  | "walking"
+  | "cycling"
+  | "driving"
+  | "transit";
+
+type OriginMode =
+  | "current"
+  | "custom";
+
+type TransitMode =
+  | "all"
+  | "metro"
+  | "bus"
+  | "tram"
+  | "train";
+
 type JourneySettings = {
   default_transport_mode: ModeId;
   show_co2: boolean;
@@ -46,18 +64,6 @@ type JourneySettings = {
   eco_priority: boolean;
   distance_unit: "km" | "m";
 };
-
-type ModeId =
-  | "walking"
-  | "cycling"
-  | "driving"
-  | "transit";
-
-type TransitMode =
-  | "metro"
-  | "bus"
-  | "tram"
-  | "train";
 
 type TransitSection = {
   type?: string | null;
@@ -67,8 +73,8 @@ type TransitSection = {
   line?: string | null;
   lineName?: string | null;
   direction?: string | null;
-  duration?: number;
-  distanceMeters?: number;
+  duration?: number | null;
+  distanceMeters?: number | null;
   from?: string | null;
   to?: string | null;
 };
@@ -77,94 +83,79 @@ type TransitJourney = {
   duration: number;
   departureDateTime?: string | null;
   arrivalDateTime?: string | null;
-  transfers: number;
-  walkingDuration: number;
-  sections: TransitSection[];
+  transfers?: number;
+  walkingDuration?: number;
+  sections?: TransitSection[];
 };
 
-const ALL_TRANSIT_MODES: TransitMode[] = [
-  "metro",
-  "bus",
-  "tram",
-  "train",
-];
-
-const mainModes = [
+const modes = [
   {
-    id: "walking",
+    id: "walking" as const,
     label: "Marche",
     icon: Footprints,
   },
   {
-    id: "cycling",
+    id: "cycling" as const,
     label: "Vélo",
     icon: Bike,
   },
   {
-    id: "driving",
+    id: "driving" as const,
     label: "Voiture",
     icon: Car,
   },
   {
-    id: "transit",
+    id: "transit" as const,
     label: "Transports",
     icon: Bus,
   },
-] satisfies {
-  id: ModeId;
-  label: string;
-  icon: typeof Bike;
-}[];
+];
 
-const transitFilters = [
+const transitModes: {
+  id: TransitMode;
+  label: string;
+}[] = [
+  {
+    id: "all",
+    label: "Tous",
+  },
   {
     id: "metro",
     label: "Métro",
-    icon: TrainFront,
   },
   {
     id: "bus",
     label: "Bus",
-    icon: Bus,
   },
   {
     id: "tram",
     label: "Tram",
-    icon: TramFront,
   },
   {
     id: "train",
-    label: "Train / RER",
-    icon: TrainFront,
+    label: "Train",
   },
-] satisfies {
-  id: TransitMode;
-  label: string;
-  icon: typeof Bus;
-}[];
-
-function isMapboxMode(
-  mode: ModeId
-): mode is MapboxTravelMode {
-  return (
-    mode === "walking" ||
-    mode === "cycling" ||
-    mode === "driving"
-  );
-}
+];
 
 function formatDuration(
   seconds: number
 ) {
   const minutes =
-    Math.round(seconds / 60);
+    Math.max(
+      1,
+      Math.round(
+        seconds / 60
+      )
+    );
 
   if (minutes < 60) {
     return `${minutes} min`;
   }
 
   const hours =
-    Math.floor(minutes / 60);
+    Math.floor(
+      minutes / 60
+    );
 
   const remaining =
     minutes % 60;
@@ -174,143 +165,179 @@ function formatDuration(
     : `${hours} h`;
 }
 
-function formatDistance(
-  meters: number
-) {
-  if (meters < 1000) {
-    return `${Math.round(meters)} m`;
-  }
-
-  return `${(
-    meters / 1000
-  ).toFixed(1)} km`;
-}
-
-function formatTime(
+function formatTransitTime(
   value?: string | null
 ) {
   if (!value) {
-    return "—";
+    return null;
   }
 
-  const match =
-    value.match(
-      /T(\d{2})(\d{2})/
-    );
-
-  if (!match) {
-    return "—";
-  }
-
-  return `${match[1]}:${match[2]}`;
-}
-
-function formatCO2(
-  value: number
-) {
-  if (value < 1) {
-    return `${Math.round(
-      value * 1000
-    )} g`;
-  }
-
-  return `${value.toFixed(
-    2
-  )} kg`;
-}
-
-function normalize(
-  value?: string | null
-) {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(
-      /[\u0300-\u036f]/g,
-      ""
+  /*
+   * Navitia renvoie souvent :
+   * 20260905T083000
+   */
+  if (
+    /^\d{8}T\d{6}$/.test(
+      value
     )
-    .toLowerCase();
-}
-
-function getMapboxModeLabel(
-  mode: MapboxTravelMode
-) {
-  switch (mode) {
-    case "walking":
-      return "Marche";
-
-    case "cycling":
-      return "Vélo";
-
-    case "driving":
-      return "Voiture";
+  ) {
+    return `${value.slice(
+      9,
+      11
+    )}:${value.slice(
+      11,
+      13
+    )}`;
   }
-}
 
-function getMapboxIcon(
-  mode: MapboxTravelMode
-) {
-  switch (mode) {
-    case "walking":
-      return Footprints;
-
-    case "cycling":
-      return Bike;
-
-    case "driving":
-      return Car;
-  }
-}
-
-function getTransitModeFromSection(
-  section: TransitSection
-): TransitMode | null {
-  const values =
-    normalize(
-      [
-        section.mode,
-        section.physicalMode,
-        section.commercialMode,
-        section.lineName,
-        section.line,
-      ]
-        .filter(Boolean)
-        .join(" ")
-    );
+  const date =
+    new Date(value);
 
   if (
-    values.includes("metro")
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat(
+    "fr-FR",
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  ).format(date);
+}
+
+function getTransitEmissionMode(
+  section: TransitSection
+):
+  | "walking"
+  | "metro"
+  | "bus"
+  | "tram"
+  | "train" {
+  const value =
+    `${section.mode ?? ""} ${section.physicalMode ?? ""} ${section.commercialMode ?? ""}`
+      .toLowerCase();
+
+  if (
+    value.includes("metro")
   ) {
     return "metro";
   }
 
   if (
-    values.includes("tram")
+    value.includes("tram")
   ) {
     return "tram";
   }
 
   if (
-    values.includes("bus")
+    value.includes("bus")
   ) {
     return "bus";
   }
 
   if (
-    values.includes("rer") ||
-    values.includes("train") ||
-    values.includes("rail") ||
-    values.includes("transilien") ||
-    values.includes("rapidtransit")
+    value.includes("train") ||
+    value.includes("rail") ||
+    value.includes("rer") ||
+    value.includes("transilien")
   ) {
     return "train";
   }
 
-  return null;
+  return "walking";
 }
 
-function getTransitModeLabel(
-  mode: TransitMode
+function buildTransitCO2Segments(
+  journey: TransitJourney
+): CO2Segment[] {
+  return (
+    journey.sections ?? []
+  )
+    .map(
+      (
+        section
+      ): CO2Segment => ({
+        mode:
+          getTransitEmissionMode(
+            section
+          ),
+
+        distanceMeters:
+          Number(
+            section.distanceMeters ??
+              0
+          ),
+      })
+    )
+    .filter(
+      (segment) =>
+        segment.distanceMeters >
+        0
+    );
+}
+
+function getSectionLabel(
+  section: TransitSection
 ) {
+  const mode =
+    getTransitEmissionMode(
+      section
+    );
+
+  if (mode === "walking") {
+    return "Marche";
+  }
+
+  if (
+    section.lineName &&
+    section.line
+  ) {
+    if (
+      section.lineName
+        .toLowerCase()
+        .includes(
+          section.line.toLowerCase()
+        )
+    ) {
+      return section.lineName;
+    }
+
+    return `${section.lineName} ${section.line}`;
+  }
+
+  if (section.lineName) {
+    return section.lineName;
+  }
+
+  if (section.line) {
+    if (mode === "bus") {
+      return `Bus ${section.line}`;
+    }
+
+    if (mode === "metro") {
+      return `Métro ${section.line}`;
+    }
+
+    if (mode === "tram") {
+      return `Tram ${section.line}`;
+    }
+
+    return `Train ${section.line}`;
+  }
+
+  if (section.commercialMode) {
+    return section.commercialMode;
+  }
+
+  if (section.physicalMode) {
+    return section.physicalMode;
+  }
+
   switch (mode) {
     case "metro":
       return "Métro";
@@ -322,280 +349,239 @@ function getTransitModeLabel(
       return "Tram";
 
     case "train":
-      return "Train / RER";
-  }
-}
-
-function getTransitIcon(
-  mode: TransitMode
-) {
-  switch (mode) {
-    case "bus":
-      return Bus;
-
-    case "tram":
-      return TramFront;
+      return "Train";
 
     default:
-      return TrainFront;
+      return "Marche";
   }
 }
 
-function getJourneyTransportModes(
-  journey: TransitJourney
-) {
-  const modes =
-    journey.sections
-      .map(
-        getTransitModeFromSection
-      )
-      .filter(
-        (
-          mode
-        ): mode is TransitMode =>
-          mode !== null
-      );
-
-  return [
-    ...new Set(modes),
-  ].join(",") || "transit";
-}
-
-function getSectionPresentation(
+function getSectionIcon(
   section: TransitSection
 ) {
-  const type =
-    normalize(section.type);
-
   const mode =
-    normalize(section.mode);
-
-  if (
-    type.includes(
-      "street_network"
-    ) ||
-    mode.includes(
-      "walking"
-    )
-  ) {
-    return {
-      title:
-        section.duration
-          ? `${formatDuration(
-              section.duration
-            )} à pied`
-          : "Marche",
-
-      subtitle:
-        section.to
-          ? `Marcher jusqu'à ${section.to}`
-          : "Continuer à pied",
-
-      icon:
-        Footprints,
-    };
-  }
-
-  if (
-    type.includes(
-      "waiting"
-    ) ||
-    mode.includes(
-      "waiting"
-    )
-  ) {
-    return {
-      title:
-        section.duration
-          ? `Correspondance · ${formatDuration(
-              section.duration
-            )}`
-          : "Correspondance",
-
-      subtitle:
-        "Temps d'attente",
-
-      icon:
-        Clock,
-    };
-  }
-
-  if (
-    type.includes(
-      "transfer"
-    )
-  ) {
-    return {
-      title:
-        section.duration
-          ? `Correspondance · ${formatDuration(
-              section.duration
-            )}`
-          : "Correspondance",
-
-      subtitle:
-        section.to
-          ? `Rejoindre ${section.to}`
-          : "Changer de ligne",
-
-      icon:
-        Footprints,
-    };
-  }
-
-  const transitMode =
-    getTransitModeFromSection(
+    getTransitEmissionMode(
       section
     );
 
-  if (transitMode) {
-    const Icon =
-      getTransitIcon(
-        transitMode
-      );
-
-    return {
-      title:
-        `${getTransitModeLabel(
-          transitMode
-        )}${
-          section.line
-            ? ` ${section.line}`
-            : ""
-        }`,
-
-      subtitle:
-        section.direction
-          ? `Direction ${section.direction}`
-          : section.to
-            ? `Jusqu'à ${section.to}`
-            : "",
-
-      icon:
-        Icon,
-    };
+  if (mode === "bus") {
+    return Bus;
   }
 
-  return {
-    title:
-      "Déplacement",
-
-    subtitle:
-      section.to
-        ? `Jusqu'à ${section.to}`
-        : "",
-
-    icon:
-      MapPin,
-  };
-}
-
-function buildTransitCO2Segments(
-  journey: TransitJourney
-): CO2Segment[] {
-  const segments: CO2Segment[] =
-    [];
-
-  for (
-    const section of journey.sections
+  if (
+    mode === "metro" ||
+    mode === "tram" ||
+    mode === "train"
   ) {
-    const distance =
-      section.distanceMeters ??
-      0;
-
-    if (distance <= 0) {
-      continue;
-    }
-
-    const type =
-      normalize(section.type);
-
-    const mode =
-      normalize(section.mode);
-
-    if (
-      type.includes(
-        "street_network"
-      ) ||
-      mode.includes(
-        "walking"
-      )
-    ) {
-      segments.push({
-        mode: "walking",
-        distanceMeters:
-          distance,
-      });
-
-      continue;
-    }
-
-    const transitMode =
-      getTransitModeFromSection(
-        section
-      );
-
-    if (
-      transitMode
-    ) {
-      segments.push({
-        mode:
-          transitMode,
-        distanceMeters:
-          distance,
-      });
-    }
+    return TrainFront;
   }
 
-  return segments;
+  return Footprints;
 }
 
 export default function JourneyPlanner() {
+  const searchParams =
+    useSearchParams();
+
+  const savedDestination =
+    searchParams.get(
+      "destination"
+    );
+
   const [
     selectedMode,
     setSelectedMode,
-  ] = useState<ModeId>("walking");
-  
+  ] =
+    useState<ModeId>(
+      "walking"
+    );
+
+  const [
+    originMode,
+    setOriginMode,
+  ] =
+    useState<OriginMode>(
+      "current"
+    );
+
+  const [
+    coordinates,
+    setCoordinates,
+  ] =
+    useState<JourneyCoordinates>({
+      origin: null,
+      destination: null,
+    });
+
+  const [
+    originPoint,
+    setOriginPoint,
+  ] =
+    useState<JourneyPoint | null>(
+      null
+    );
+
+  const [
+    destinationPoint,
+    setDestinationPoint,
+  ] =
+    useState<JourneyPoint | null>(
+      null
+    );
+
+  const [
+    mapboxRoute,
+    setMapboxRoute,
+  ] =
+    useState<MapboxJourneyData | null>(
+      null
+    );
+
+  const [
+    transitMode,
+    setTransitMode,
+  ] =
+    useState<TransitMode>(
+      "all"
+    );
+
+  const [
+    transitJourneys,
+    setTransitJourneys,
+  ] =
+    useState<
+      TransitJourney[]
+    >([]);
+
+  const [
+    selectedTransitIndex,
+    setSelectedTransitIndex,
+  ] =
+    useState<
+      number | null
+    >(null);
+
+  const [
+    loadingTransit,
+    setLoadingTransit,
+  ] =
+    useState(false);
+
+  const [
+    actionError,
+    setActionError,
+  ] =
+    useState("");
+
+  const [
+    selectedJourneyId,
+    setSelectedJourneyId,
+  ] =
+    useState<
+      string | null
+    >(null);
+
+  const [
+    journeyStatus,
+    setJourneyStatus,
+  ] =
+    useState<
+      | "idle"
+      | "planned"
+      | "started"
+      | "completed"
+    >("idle");
+
+  const [
+    creatingJourney,
+    setCreatingJourney,
+  ] =
+    useState(false);
+
+  const [
+    startingJourney,
+    setStartingJourney,
+  ] =
+    useState(false);
+
+  const [
+    completingJourney,
+    setCompletingJourney,
+  ] =
+    useState(false);
+
+  const [
+    completionReward,
+    setCompletionReward,
+  ] =
+    useState<{
+      co2_saved?: number;
+      flows_earned?: number;
+    } | null>(
+      null
+    );
+
   const [
     showCO2,
     setShowCO2,
-  ] = useState(true);
-  
+  ] =
+    useState(true);
+
   const [
     showFlows,
     setShowFlows,
-  ] = useState(true);
-  
+  ] =
+    useState(true);
+
   const [
     ecoPriority,
     setEcoPriority,
-  ] = useState(false);
-  
+  ] =
+    useState(false);
+
   const [
     distanceUnit,
     setDistanceUnit,
-  ] = useState<"km" | "m">("km");
-  
+  ] =
+    useState<
+      "km" | "m"
+    >("km");
+
   const [
     settingsLoaded,
     setSettingsLoaded,
-  ] = useState(false);
+  ] =
+    useState(false);
 
+  const [
+    savedDestinationLoading,
+    setSavedDestinationLoading,
+  ] =
+    useState(false);
+
+  /*
+   * Paramètres utilisateur
+   */
   useEffect(() => {
     async function loadJourneySettings() {
       const supabase =
         createClient();
-  
+
       const {
-        data: { user },
+        data: {
+          user,
+        },
       } =
         await supabase.auth.getUser();
-  
+
       if (!user) {
-        setSettingsLoaded(true);
+        setSettingsLoaded(
+          true
+        );
+
         return;
       }
-  
+
       const {
         data,
         error,
@@ -609,531 +595,769 @@ export default function JourneyPlanner() {
             eco_priority,
             distance_unit
           `)
-          .eq("id", user.id)
+          .eq(
+            "id",
+            user.id
+          )
           .single();
-  
+
       if (error) {
         console.error(
           "Erreur chargement paramètres trajet :",
           error
         );
-  
-        setSettingsLoaded(true);
+
+        setSettingsLoaded(
+          true
+        );
+
         return;
       }
-  
+
       const settings =
         data as JourneySettings;
-  
+
       const mode =
         settings.default_transport_mode;
-  
+
       if (
         mode === "walking" ||
         mode === "cycling" ||
         mode === "driving" ||
         mode === "transit"
       ) {
-        setSelectedMode(mode);
+        setSelectedMode(
+          mode
+        );
       }
-  
+
       setShowCO2(
         settings.show_co2 ??
           true
       );
-  
+
       setShowFlows(
         settings.show_flows ??
           true
       );
-  
+
       setEcoPriority(
         settings.eco_priority ??
           false
       );
-  
+
       setDistanceUnit(
         settings.distance_unit ??
           "km"
       );
-  
-      setSettingsLoaded(true);
+
+      setSettingsLoaded(
+        true
+      );
     }
-  
+
     loadJourneySettings();
   }, []);
 
-  const [
-    coordinates,
-    setCoordinates,
-  ] =
-    useState<JourneyCoordinates>({
-      origin: null,
-      destination: null,
-    });
-
-  const [
-    mapboxJourney,
-    setMapboxJourney,
-  ] =
-    useState<MapboxJourneyData | null>(
-      null
-    );
-
-  const [
-    selectedTransitModes,
-    setSelectedTransitModes,
-  ] =
-    useState<TransitMode[]>(
-      ALL_TRANSIT_MODES
-    );
-
-  const [
-    transitJourneys,
-    setTransitJourneys,
-  ] =
-    useState<TransitJourney[]>(
-      []
-    );
-
-  const [
-    transitLoading,
-    setTransitLoading,
-  ] =
-    useState(false);
-
-  const [
-    transitError,
-    setTransitError,
-  ] =
-    useState("");
-
-  const [
-    selectedJourneyIndex,
-    setSelectedJourneyIndex,
-  ] =
-    useState<number | null>(
-      null
-    );
-
-  const [
-    selectedJourneyId,
-    setSelectedJourneyId,
-  ] =
-    useState<string | null>(
-      null
-    );
-
-  const [
-    choosingJourney,
-    setChoosingJourney,
-  ] =
-    useState(false);
-
-  const [
-    actionError,
-    setActionError,
-  ] =
-    useState("");
-
-  const [
-    journeyStarted,
-    setJourneyStarted,
-  ] =
-    useState(false);
-
-  const [
-    startingJourney,
-    setStartingJourney,
-  ] =
-    useState(false);
-
-  const [
-    journeyCompleted,
-    setJourneyCompleted,
-  ] =
-    useState(false);
-
-  const [
-    completingJourney,
-    setCompletingJourney,
-  ] =
-    useState(false);
-
-  const handleCoordinatesChange =
-    useCallback(
-      (
-        nextCoordinates: JourneyCoordinates
-      ) => {
-        setCoordinates(
-          nextCoordinates
-        );
-      },
-      []
-    );
-
-  const handleMapboxRouteChange =
-    useCallback(
-      (
-        route: MapboxJourneyData | null
-      ) => {
-        setMapboxJourney(
-          route
-        );
-      },
-      []
-    );
-
-  const mapMode =
-    isMapboxMode(
-      selectedMode
-    )
-      ? selectedMode
-      : null;
-
-  const allTransitSelected =
-    selectedTransitModes.length ===
-    ALL_TRANSIT_MODES.length;
-
-  const mapboxCO2 =
-    useMemo(() => {
+  /*
+   * Destination Maison / Travail
+   */
+  useEffect(() => {
+    async function loadSavedDestination() {
       if (
-        !mapboxJourney
+        !savedDestination
       ) {
-        return null;
+        return;
       }
 
-      return calculateCO2([
-        {
-          mode:
-            mapboxJourney.mode,
-          distanceMeters:
-            mapboxJourney.distance,
-        },
-      ]);
-    }, [
-      mapboxJourney,
-    ]);
+      const accessToken =
+        process.env
+          .NEXT_PUBLIC_MAPBOX_TOKEN;
 
-  function resetJourneySelection() {
-    if (
-      journeyStarted
-    ) {
-      return;
+      if (!accessToken) {
+        setActionError(
+          "La clé Mapbox est manquante."
+        );
+
+        return;
+      }
+
+      setSavedDestinationLoading(
+        true
+      );
+
+      setActionError("");
+
+      try {
+        const response =
+          await fetch(
+            `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+              savedDestination
+            )}.json?access_token=${accessToken}&country=FR&language=fr&limit=1`
+          );
+
+        if (!response.ok) {
+          throw new Error(
+            "Impossible de localiser le lieu enregistré."
+          );
+        }
+
+        const data =
+          await response.json();
+
+        const feature =
+          data.features?.[0];
+
+        const coords =
+          feature
+            ?.geometry
+            ?.coordinates;
+
+        if (
+          !Array.isArray(
+            coords
+          ) ||
+          coords.length < 2
+        ) {
+          throw new Error(
+            "Impossible de trouver cette adresse."
+          );
+        }
+
+        const destinationCoordinates: [
+          number,
+          number
+        ] = [
+          Number(coords[0]),
+          Number(coords[1]),
+        ];
+
+        const point:
+          JourneyPoint = {
+          name:
+            savedDestination,
+
+          coordinates:
+            destinationCoordinates,
+        };
+
+        setOriginMode(
+          "current"
+        );
+
+        setDestinationPoint(
+          point
+        );
+
+        setCoordinates(
+          (current) => ({
+            ...current,
+
+            destination:
+              destinationCoordinates,
+          })
+        );
+      } catch (error) {
+        console.error(
+          "Erreur lieu enregistré :",
+          error
+        );
+
+        setActionError(
+          error instanceof Error
+            ? error.message
+            : "Impossible de charger ce lieu enregistré."
+        );
+      } finally {
+        setSavedDestinationLoading(
+          false
+        );
+      }
     }
 
+    loadSavedDestination();
+  }, [
+    savedDestination,
+  ]);
+
+  function formatDistance(
+    meters: number
+  ) {
+    if (
+      distanceUnit === "m"
+    ) {
+      return `${Math.round(
+        meters
+      )} m`;
+    }
+
+    if (
+      meters < 1000
+    ) {
+      return `${Math.round(
+        meters
+      )} m`;
+    }
+
+    return `${(
+      meters / 1000
+    ).toFixed(1)} km`;
+  }
+
+  function resetJourneySelection() {
     setSelectedJourneyId(
       null
     );
 
-    setSelectedJourneyIndex(
+    setJourneyStatus(
+      "idle"
+    );
+
+    setSelectedTransitIndex(
+      null
+    );
+
+    setCompletionReward(
       null
     );
 
     setActionError(
       ""
     );
-
-    setJourneyStarted(
-      false
-    );
-
-    setJourneyCompleted(
-      false
-    );
   }
-
-  function toggleTransitMode(
-    mode: TransitMode
-  ) {
+  async function cancelSelectedJourney() {
     if (
-      selectedJourneyId
+      !selectedJourneyId
     ) {
+      resetJourneySelection();
       return;
     }
-
-    setSelectedTransitModes(
-      (current) => {
-        if (
-          current.includes(
-            mode
-          )
-        ) {
-          if (
-            current.length ===
-            1
-          ) {
-            return current;
+  
+    if (
+      journeyStatus !==
+      "planned"
+    ) {
+      resetJourneySelection();
+      return;
+    }
+  
+    setActionError("");
+  
+    try {
+      const response =
+        await fetch(
+          `/api/journeys/${selectedJourneyId}/cancel`,
+          {
+            method:
+              "POST",
           }
-
-          return current.filter(
-            (item) =>
-              item !== mode
+        );
+  
+      const text =
+        await response.text();
+  
+      let data:
+        | {
+            success?: boolean;
+            error?: string;
+          }
+        | null =
+        null;
+  
+      if (text) {
+        try {
+          data =
+            JSON.parse(text);
+        } catch {
+          console.error(
+            "Réponse annulation invalide :",
+            text
           );
         }
-
-        return [
-          ...current,
-          mode,
-        ];
       }
-    );
+  
+      if (
+        !response.ok
+      ) {
+        throw new Error(
+          data?.error ??
+            "Impossible d'annuler le trajet."
+        );
+      }
+  
+      resetJourneySelection();
+  
+      setTransitJourneys(
+        []
+      );
+  
+      setMapboxRoute(
+        null
+      );
+    } catch (error) {
+      console.error(
+        "Erreur annulation trajet :",
+        error
+      );
+  
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'annuler le trajet."
+      );
+    }
   }
-
-  function selectAllTransitModes() {
+  function changeOriginMode(
+    value: OriginMode
+  ) {
     if (
-      selectedJourneyId
+      journeyStatus ===
+      "started"
     ) {
       return;
     }
 
-    setSelectedTransitModes(
-      ALL_TRANSIT_MODES
+    resetJourneySelection();
+
+    setOriginMode(
+      value
+    );
+
+    setOriginPoint(
+      null
+    );
+
+    setCoordinates(
+      (current) => ({
+        ...current,
+        origin: null,
+      })
+    );
+
+    setMapboxRoute(
+      null
+    );
+
+    setTransitJourneys(
+      []
     );
   }
 
-  async function createJourney(
-    data: {
-      transportMode: string;
-      duration: number;
-      distance?: number | null;
-      tripCO2Kg?: number;
-      referenceCarCO2Kg?: number;
-      co2SavedKg?: number;
-      flowsPotential?: number;
-    }
-  ) {
+  const mapboxCO2 =
+    useMemo(() => {
+      if (
+        !mapboxRoute
+      ) {
+        return null;
+      }
+
+      const mode =
+        mapboxRoute.mode ===
+        "walking"
+          ? "walking"
+          : mapboxRoute.mode ===
+              "cycling"
+            ? "cycling"
+            : "driving";
+
+      return calculateCO2([
+        {
+          mode,
+
+          distanceMeters:
+            mapboxRoute.distance,
+        },
+      ]);
+    }, [
+      mapboxRoute,
+    ]);
+
+  async function searchTransit() {
     if (
       !coordinates.origin ||
       !coordinates.destination
     ) {
-      throw new Error(
-        "Coordonnées du trajet incomplètes."
-      );
-    }
-
-    const response =
-      await fetch(
-        "/api/journeys",
-        {
-          method:
-            "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body:
-            JSON.stringify({
-              transportMode:
-                data.transportMode,
-
-              originName:
-                "Ma position",
-
-              destinationName:
-                "Destination",
-
-              originLng:
-                coordinates
-                  .origin[0],
-
-              originLat:
-                coordinates
-                  .origin[1],
-
-              destinationLng:
-                coordinates
-                  .destination[0],
-
-              destinationLat:
-                coordinates
-                  .destination[1],
-
-              estimatedDurationSeconds:
-                data.duration,
-
-              distanceMeters:
-                data.distance ??
-                null,
-
-              tripCO2:
-                data.tripCO2Kg ??
-                0,
-
-              referenceCarCO2:
-                data.referenceCarCO2Kg ??
-                0,
-
-              co2Saved:
-                data.co2SavedKg ??
-                0,
-
-              flowsPotential:
-                data.flowsPotential ??
-                0,
-            }),
-        }
+      setActionError(
+        "Choisissez un point de départ et une destination."
       );
 
-    const result =
-      await response.json();
-
-    if (
-      !response.ok ||
-      !result.success
-    ) {
-      throw new Error(
-        result.error ??
-          "Impossible d'enregistrer le trajet."
-      );
-    }
-
-    return result.journey.id as string;
-  }
-
-  async function chooseMapboxJourney() {
-    if (
-      !mapboxJourney ||
-      !mapboxCO2
-    ) {
       return;
     }
 
-    setChoosingJourney(
-      true
-    );
-
-    setActionError(
-      ""
-    );
+    setActionError("");
+    setLoadingTransit(true);
+    setTransitJourneys([]);
+    setSelectedTransitIndex(null);
 
     try {
-      const id =
-        await createJourney({
-          transportMode:
-            mapboxJourney.mode,
+      const response =
+        await fetch(
+          "/api/journeys/public-transport",
+          {
+            method: "POST",
 
-          duration:
-            mapboxJourney.duration,
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-          distance:
-            mapboxJourney.distance,
+            body:
+              JSON.stringify({
+                origin: {
+                  lng:
+                    coordinates.origin[0],
 
-          tripCO2Kg:
-            mapboxCO2.tripCO2Kg,
+                  lat:
+                    coordinates.origin[1],
+                },
 
-          referenceCarCO2Kg:
-            mapboxCO2.referenceCarCO2Kg,
+                destination: {
+                  lng:
+                    coordinates.destination[0],
 
-          co2SavedKg:
-            mapboxCO2.co2SavedKg,
+                  lat:
+                    coordinates.destination[1],
+                },
 
-          flowsPotential:
-            mapboxCO2.flowsPotential,
-        });
+                mode:
+                  transitMode,
+              }),
+          }
+        );
 
-      setSelectedJourneyId(
-        id
+      const text =
+        await response.text();
+
+      if (!text) {
+        throw new Error(
+          `Le service de transport n'a renvoyé aucune réponse (${response.status}).`
+        );
+      }
+
+      let data: {
+        journeys?: TransitJourney[];
+        error?: string;
+      };
+
+      try {
+        data =
+          JSON.parse(text);
+      } catch {
+        console.error(
+          "Réponse transports non JSON :",
+          text
+        );
+
+        throw new Error(
+          "La réponse du service de transport est invalide."
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ??
+            `Erreur transport (${response.status}).`
+        );
+      }
+
+      const journeys =
+        data.journeys ??
+        [];
+
+      if (
+        !Array.isArray(
+          journeys
+        ) ||
+        journeys.length === 0
+      ) {
+        setActionError(
+          "Aucun trajet en transport en commun trouvé."
+        );
+
+        return;
+      }
+
+      setTransitJourneys(
+        journeys
       );
     } catch (error) {
+      console.error(
+        "Erreur recherche transports :",
+        error
+      );
+
       setActionError(
         error instanceof Error
           ? error.message
-          : "Impossible de choisir ce trajet."
+          : "Impossible de rechercher les transports."
       );
     } finally {
-      setChoosingJourney(
+      setLoadingTransit(
         false
       );
     }
   }
 
-  async function chooseTransitJourney(
-    journey: TransitJourney,
-    index: number
+  function getSelectedJourneyData() {
+    if (
+      selectedMode !==
+      "transit"
+    ) {
+      if (
+        !mapboxRoute ||
+        !mapboxCO2
+      ) {
+        return null;
+      }
+
+      return {
+        duration:
+          mapboxRoute.duration,
+
+        distance:
+          mapboxRoute.distance,
+
+        co2Segments: [
+          {
+            mode:
+              selectedMode ===
+              "walking"
+                ? "walking"
+                : selectedMode ===
+                    "cycling"
+                  ? "cycling"
+                  : "driving",
+
+            distanceMeters:
+              mapboxRoute.distance,
+          },
+        ] as CO2Segment[],
+      };
+    }
+
+    if (
+      selectedTransitIndex ===
+      null
+    ) {
+      return null;
+    }
+
+    const journey =
+      transitJourneys[
+        selectedTransitIndex
+      ];
+
+    if (!journey) {
+      return null;
+    }
+
+    const segments =
+      buildTransitCO2Segments(
+        journey
+      );
+
+    const distance =
+      segments.reduce(
+        (
+          total,
+          segment
+        ) =>
+          total +
+          segment.distanceMeters,
+        0
+      );
+
+    return {
+      duration:
+        journey.duration,
+
+      distance,
+
+      co2Segments:
+        segments,
+    };
+  }
+
+  async function chooseJourney(
+    transitIndex?: number
   ) {
-    setChoosingJourney(
+    if (
+      !coordinates.origin ||
+      !coordinates.destination
+    ) {
+      setActionError(
+        "Choisissez un départ et une destination."
+      );
+
+      return;
+    }
+
+    if (
+      selectedMode ===
+        "transit" &&
+      typeof transitIndex ===
+        "number"
+    ) {
+      setSelectedTransitIndex(
+        transitIndex
+      );
+    }
+
+    const selectedData =
+      selectedMode ===
+        "transit" &&
+      typeof transitIndex ===
+        "number"
+        ? (() => {
+            const journey =
+              transitJourneys[
+                transitIndex
+              ];
+
+            if (!journey) {
+              return null;
+            }
+
+            const segments =
+              buildTransitCO2Segments(
+                journey
+              );
+
+            return {
+              duration:
+                journey.duration,
+
+              distance:
+                segments.reduce(
+                  (
+                    total,
+                    segment
+                  ) =>
+                    total +
+                    segment.distanceMeters,
+                  0
+                ),
+
+              co2Segments:
+                segments,
+            };
+          })()
+        : getSelectedJourneyData();
+
+    if (!selectedData) {
+      setActionError(
+        "Impossible de sélectionner ce trajet."
+      );
+
+      return;
+    }
+
+    setCreatingJourney(
       true
     );
 
-    setActionError(
-      ""
-    );
+    setActionError("");
 
     try {
-      const segments =
-        buildTransitCO2Segments(
-          journey
+      const response =
+        await fetch(
+          "/api/journeys",
+          {
+            method:
+              "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body:
+              JSON.stringify({
+                transportMode:
+                  selectedMode,
+
+                originName:
+                  originPoint?.name ??
+                  (originMode ===
+                  "current"
+                    ? "Ma position actuelle"
+                    : "Point de départ"),
+
+                destinationName:
+                  destinationPoint?.name ??
+                  "Destination",
+
+                originLng:
+                  coordinates.origin[0],
+
+                originLat:
+                  coordinates.origin[1],
+
+                destinationLng:
+                  coordinates.destination[0],
+
+                destinationLat:
+                  coordinates.destination[1],
+
+                estimatedDurationSeconds:
+                  Math.round(
+                    selectedData.duration
+                  ),
+
+                distanceMeters:
+                  selectedData.distance,
+
+                co2Segments:
+                  selectedData.co2Segments,
+              }),
+          }
         );
 
-      const co2 =
-        calculateCO2(
-          segments
+      const text =
+        await response.text();
+
+      if (!text) {
+        throw new Error(
+          "Le serveur n'a renvoyé aucune réponse."
         );
+      }
 
-      const totalDistance =
-        segments.reduce(
-          (
-            total,
-            segment
-          ) =>
-            total +
-            segment.distanceMeters,
-          0
+      const data =
+        JSON.parse(text);
+
+      if (
+        !response.ok
+      ) {
+        throw new Error(
+          data.error ??
+            "Impossible d'enregistrer le trajet."
         );
-
-      const id =
-        await createJourney({
-          transportMode:
-            getJourneyTransportModes(
-              journey
-            ),
-
-          duration:
-            journey.duration,
-
-          distance:
-            totalDistance,
-
-          tripCO2Kg:
-            co2.tripCO2Kg,
-
-          referenceCarCO2Kg:
-            co2.referenceCarCO2Kg,
-
-          co2SavedKg:
-            co2.co2SavedKg,
-
-          flowsPotential:
-            co2.flowsPotential,
-        });
+      }
 
       setSelectedJourneyId(
-        id
+        data.journey?.id ??
+          data.id
       );
 
-      setSelectedJourneyIndex(
-        index
+      setJourneyStatus(
+        "planned"
       );
     } catch (error) {
       setActionError(
         error instanceof Error
           ? error.message
-          : "Impossible de choisir ce trajet."
+          : "Impossible de sélectionner ce trajet."
       );
     } finally {
-      setChoosingJourney(
+      setCreatingJourney(
         false
       );
     }
   }
 
   async function startJourney() {
-
     const allowed =
-    await canUseLocation();
+      await canUseLocation();
 
     if (!allowed) {
       setActionError(
@@ -1142,9 +1366,20 @@ export default function JourneyPlanner() {
 
       return;
     }
+
     if (
       !selectedJourneyId
     ) {
+      return;
+    }
+
+    if (
+      !navigator.geolocation
+    ) {
+      setActionError(
+        "La géolocalisation n'est pas disponible."
+      );
+
       return;
     }
 
@@ -1152,12 +1387,12 @@ export default function JourneyPlanner() {
       true
     );
 
-    setActionError(
-      ""
-    );
+    setActionError("");
 
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
+      async (
+        position
+      ) => {
         try {
           const response =
             await fetch(
@@ -1173,37 +1408,39 @@ export default function JourneyPlanner() {
 
                 body:
                   JSON.stringify({
-                    latitude:
-                      position.coords
+                    lat:
+                      position
+                        .coords
                         .latitude,
 
-                    longitude:
-                      position.coords
+                    lng:
+                      position
+                        .coords
                         .longitude,
                   }),
               }
             );
 
-          const result =
+          const data =
             await response.json();
 
           if (
-            !response.ok ||
-            !result.success
+            !response.ok
           ) {
             throw new Error(
-              result.error
+              data.error ??
+                "Impossible de démarrer le trajet."
             );
           }
 
-          setJourneyStarted(
-            true
+          setJourneyStatus(
+            "started"
           );
         } catch (error) {
           setActionError(
             error instanceof Error
               ? error.message
-              : "Impossible de démarrer."
+              : "Impossible de démarrer le trajet."
           );
         } finally {
           setStartingJourney(
@@ -1224,21 +1461,17 @@ export default function JourneyPlanner() {
 
       {
         enableHighAccuracy:
-          false,
+          true,
 
         timeout:
-          20000,
-
-        maximumAge:
-          30000,
+          10000,
       }
     );
   }
 
   async function completeJourney() {
-
     const allowed =
-    await canUseLocation();
+      await canUseLocation();
 
     if (!allowed) {
       setActionError(
@@ -1247,9 +1480,20 @@ export default function JourneyPlanner() {
 
       return;
     }
+
     if (
       !selectedJourneyId
     ) {
+      return;
+    }
+
+    if (
+      !navigator.geolocation
+    ) {
+      setActionError(
+        "La géolocalisation n'est pas disponible."
+      );
+
       return;
     }
 
@@ -1257,12 +1501,12 @@ export default function JourneyPlanner() {
       true
     );
 
-    setActionError(
-      ""
-    );
+    setActionError("");
 
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
+      async (
+        position
+      ) => {
         try {
           const response =
             await fetch(
@@ -1278,37 +1522,44 @@ export default function JourneyPlanner() {
 
                 body:
                   JSON.stringify({
-                    latitude:
-                      position.coords
+                    lat:
+                      position
+                        .coords
                         .latitude,
 
-                    longitude:
-                      position.coords
+                    lng:
+                      position
+                        .coords
                         .longitude,
                   }),
               }
             );
 
-          const result =
+          const data =
             await response.json();
 
           if (
-            !response.ok ||
-            !result.success
+            !response.ok
           ) {
             throw new Error(
-              result.error
+              data.error ??
+                "Impossible de terminer le trajet."
             );
           }
 
-          setJourneyCompleted(
-            true
+          setCompletionReward(
+            data.reward ??
+              null
+          );
+
+          setJourneyStatus(
+            "completed"
           );
         } catch (error) {
           setActionError(
             error instanceof Error
               ? error.message
-              : "Impossible de terminer."
+              : "Impossible de terminer le trajet."
           );
         } finally {
           setCompletingJourney(
@@ -1329,345 +1580,376 @@ export default function JourneyPlanner() {
 
       {
         enableHighAccuracy:
-          false,
+          true,
 
         timeout:
-          20000,
-
-        maximumAge:
-          30000,
+          10000,
       }
     );
   }
 
-  async function loadTransitJourneys() {
-    if (
-      !coordinates.origin ||
-      !coordinates.destination
-    ) {
-      return;
-    }
-
-    setTransitLoading(
-      true
-    );
-
-    setTransitError(
-      ""
-    );
-
-    try {
-      const from =
-        `${coordinates.origin[0]};${coordinates.origin[1]}`;
-
-      const to =
-        `${coordinates.destination[0]};${coordinates.destination[1]}`;
-
-      const modes =
-        selectedTransitModes.join(
-          ","
-        );
-
-      const response =
-        await fetch(
-          `/api/journeys/public-transport?from=${encodeURIComponent(
-            from
-          )}&to=${encodeURIComponent(
-            to
-          )}&modes=${encodeURIComponent(
-            modes
-          )}`,
-          {
-            cache:
-              "no-store",
-          }
-        );
-
-      const result =
-        await response.json();
-
-      if (
-        !response.ok ||
-        !result.success
-      ) {
-        throw new Error(
-          result.error
-        );
-      }
-
-      const normalized: TransitJourney[] =
-        (
-          result.journeys ??
-          []
-        ).map(
-          (journey: any) => ({
-            duration:
-              journey.duration ??
-              0,
-
-            departureDateTime:
-              journey.departureDateTime ??
-              null,
-
-            arrivalDateTime:
-              journey.arrivalDateTime ??
-              null,
-
-            transfers:
-              journey.transfers ??
-              0,
-
-            walkingDuration:
-              journey.walkingDuration ??
-              0,
-
-            sections:
-              (
-                journey.sections ??
-                []
-              ).map(
-                (
-                  section: any
-                ) => ({
-                  type:
-                    section.type ??
-                    null,
-
-                  mode:
-                    section.mode ??
-                    null,
-
-                  physicalMode:
-                    section.physicalMode ??
-                    null,
-
-                  commercialMode:
-                    section.commercialMode ??
-                    null,
-
-                  line:
-                    section.line ??
-                    null,
-
-                  lineName:
-                    section.lineName ??
-                    null,
-
-                  direction:
-                    section.direction ??
-                    null,
-
-                  duration:
-                    section.duration ??
-                    0,
-
-                  distanceMeters:
-                    section.distanceMeters ??
-                    0,
-
-                  from:
-                    section.from ??
-                    null,
-
-                  to:
-                    section.to ??
-                    null,
-                })
-              ),
-          })
-        );
-
-      setTransitJourneys(
-        normalized.slice(
-          0,
-          4
-        )
-      );
-
-      setSelectedJourneyId(
-        null
-      );
-
-      setSelectedJourneyIndex(
-        null
-      );
-    } catch (error) {
-      setTransitError(
-        error instanceof Error
-          ? error.message
-          : "Impossible de charger les transports."
-      );
-    } finally {
-      setTransitLoading(
-        false
-      );
-    }
-  }
-
-  useEffect(() => {
-    if (
-      selectedMode !==
-        "transit" ||
-      !coordinates.origin ||
-      !coordinates.destination ||
-      selectedJourneyId
-    ) {
-      return;
-    }
-
-    loadTransitJourneys();
-  }, [
-    selectedMode,
-    coordinates.origin,
-    coordinates.destination,
-    selectedTransitModes,
-  ]);
-
-  function handleModeChange(
-    mode: ModeId
+  if (
+    !settingsLoaded
   ) {
-    if (
-      journeyStarted
-    ) {
-      return;
-    }
+    return (
+      <div className="mt-8 flex items-center justify-center py-10">
 
-    setSelectedMode(
-      mode
-    );
+        <LoaderCircle
+          size={22}
+          className="animate-spin text-primary"
+        />
 
-    resetJourneySelection();
-
-    setActionError(
-      ""
+      </div>
     );
   }
 
-  const visibleTransitJourneys =
-    transitJourneys
-      .map(
-        (
-          journey,
-          originalIndex
-        ) => ({
-          journey,
-          originalIndex,
-        })
-      )
-      .filter(
-        ({
-          originalIndex,
-        }) =>
-          selectedJourneyIndex ===
-            null ||
-          selectedJourneyIndex ===
-            originalIndex
-      );
+  const mapMode:
+    | MapboxTravelMode
+    | null =
+    selectedMode ===
+    "transit"
+      ? null
+      : selectedMode;
 
   return (
-    <>
-      <section className="mt-6">
-        <h2 className="uf-label text-secondary">
-          Mode de transport
-        </h2>
+    <div className="mt-6">
 
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-2">
-          {mainModes.map(
+      {/* Choix départ */}
+      <section className="uf-card p-4">
+
+        <p className="uf-label text-secondary">
+          Point de départ
+        </p>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+
+          <button
+            type="button"
+            disabled={
+              journeyStatus ===
+              "started"
+            }
+            onClick={() =>
+              changeOriginMode(
+                "current"
+              )
+            }
+            className={`flex items-center justify-center gap-2 rounded-[16px] border px-3 py-3 text-sm font-semibold transition ${
+              originMode ===
+              "current"
+                ? "border-primary bg-primary-soft text-primary"
+                : "border-border bg-surface text-secondary"
+            }`}
+          >
+
+            <LocateFixed
+              size={17}
+            />
+
+            Ma position
+
+          </button>
+
+          <button
+            type="button"
+            disabled={
+              journeyStatus ===
+              "started"
+            }
+            onClick={() =>
+              changeOriginMode(
+                "custom"
+              )
+            }
+            className={`flex items-center justify-center gap-2 rounded-[16px] border px-3 py-3 text-sm font-semibold transition ${
+              originMode ===
+              "custom"
+                ? "border-primary bg-primary-soft text-primary"
+                : "border-border bg-surface text-secondary"
+            }`}
+          >
+
+            <MapPin
+              size={17}
+            />
+
+            Choisir un départ
+
+          </button>
+
+        </div>
+
+      </section>
+
+      {/* Modes */}
+      <section className="mt-5">
+
+        <p className="uf-label text-secondary">
+          Mode de transport
+        </p>
+
+        <div className="mt-3 grid grid-cols-4 gap-2">
+
+          {modes.map(
             ({
               id,
               label,
-              icon: Icon,
-            }) => (
-              <button
-                key={id}
-                type="button"
-                disabled={
-                  journeyStarted
-                }
-                onClick={() =>
-                  handleModeChange(
-                    id
-                  )
-                }
-                className={`flex shrink-0 items-center gap-2 rounded-full border px-4 py-2.5 transition disabled:opacity-50 ${
-                  selectedMode ===
-                  id
-                    ? "border-primary bg-primary text-white"
-                    : "border-border bg-white text-secondary"
-                }`}
-              >
-                <Icon
-                  size={16}
-                />
+              icon:
+                Icon,
+            }) => {
+              const active =
+                selectedMode ===
+                id;
 
-                <span className="uf-caption">
-                  {label}
-                </span>
-              </button>
-            )
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={
+                    journeyStatus ===
+                    "started"
+                  }
+                  onClick={() => {
+                    setSelectedMode(
+                      id
+                    );
+
+                    resetJourneySelection();
+
+                    setTransitJourneys(
+                      []
+                    );
+                  }}
+                  className={`flex min-h-[78px] flex-col items-center justify-center gap-2 rounded-[16px] border px-2 transition ${
+                    active
+                      ? "border-primary bg-primary-soft text-primary"
+                      : "border-border bg-surface text-muted"
+                  }`}
+                >
+
+                  <Icon
+                    size={19}
+                  />
+
+                  <span className="text-[11px] font-semibold">
+                    {label}
+                  </span>
+
+                </button>
+              );
+            }
           )}
+
         </div>
+
       </section>
 
-      {selectedMode ===
+      {savedDestinationLoading && (
+        <div className="mt-5 flex items-center gap-2 rounded-[16px] bg-primary-soft p-4">
+
+          <LoaderCircle
+            size={17}
+            className="animate-spin text-primary"
+          />
+
+          <p className="uf-caption font-semibold text-primary">
+            Chargement du lieu enregistré...
+          </p>
+
+        </div>
+      )}
+
+      <UrbanFlowMap
+        mode={
+          mapMode
+        }
+        originMode={
+          originMode
+        }
+        initialDestination={
+          destinationPoint
+        }
+        onCoordinatesChange={
+          setCoordinates
+        }
+        onRouteChange={
+          setMapboxRoute
+        }
+        onOriginChange={
+          setOriginPoint
+        }
+        onDestinationChange={
+          setDestinationPoint
+        }
+      />
+
+      {/* Itinéraire Mapbox */}
+      {selectedMode !==
         "transit" &&
-        !selectedJourneyId && (
-          <section className="mt-4">
+        mapboxRoute &&
+        mapboxCO2 && (
+          <section className="uf-card mt-5 p-5">
 
-            <div className="mb-3 flex items-center gap-2">
+            <div className="flex items-start justify-between gap-4">
 
-              <SlidersHorizontal
-                size={16}
-              />
+              <div>
 
-              <p className="uf-label text-secondary">
-                Transports autorisés
-              </p>
+                <p className="uf-label text-secondary">
+                  Itinéraire proposé
+                </p>
+
+                <div className="mt-2 flex items-center gap-4 text-muted">
+
+                  <span className="flex items-center gap-1 text-sm">
+
+                    <Clock3
+                      size={15}
+                    />
+
+                    {formatDuration(
+                      mapboxRoute.duration
+                    )}
+
+                  </span>
+
+                  <span className="text-sm">
+                    {formatDistance(
+                      mapboxRoute.distance
+                    )}
+                  </span>
+
+                </div>
+
+              </div>
+
+              {ecoPriority && (
+                <span className="rounded-full bg-primary-soft px-3 py-1 text-[11px] font-semibold text-primary">
+                  Option écologique
+                </span>
+              )}
 
             </div>
 
-            <div className="flex gap-2 overflow-x-auto pb-2">
-
-              <button
-                type="button"
-                onClick={
-                  selectAllTransitModes
-                }
-                className={`shrink-0 rounded-full border px-4 py-2 ${
-                  allTransitSelected
-                    ? "border-primary bg-primary-soft text-primary"
-                    : "border-border bg-white text-muted"
+            {(showCO2 ||
+              showFlows) && (
+              <div
+                className={`mt-4 grid gap-3 ${
+                  showCO2 &&
+                  showFlows
+                    ? "grid-cols-2"
+                    : "grid-cols-1"
                 }`}
               >
-                Tous
-              </button>
 
-              {transitFilters.map(
+                {showCO2 && (
+                  <div className="rounded-[16px] bg-primary-soft p-3">
+
+                    <Leaf
+                      size={17}
+                      className="text-primary"
+                    />
+
+                    <p className="mt-2 text-lg font-bold text-primary">
+                      {mapboxCO2.co2SavedKg.toFixed(
+                        2
+                      )}{" "}
+                      kg
+                    </p>
+
+                    <p className="uf-caption text-muted">
+                      CO₂ économisé
+                    </p>
+
+                  </div>
+                )}
+
+                {showFlows && (
+                  <div className="rounded-[16px] bg-secondary-soft p-3">
+
+                    <Sparkles
+                      size={17}
+                      className="text-secondary"
+                    />
+
+                    <p className="mt-2 text-lg font-bold text-secondary">
+                      {
+                        mapboxCO2.flowsPotential
+                      }
+                    </p>
+
+                    <p className="uf-caption text-muted">
+                      FLOWS potentiels
+                    </p>
+
+                  </div>
+                )}
+
+              </div>
+            )}
+
+            {journeyStatus ===
+              "idle" && (
+              <button
+                type="button"
+                disabled={
+                  creatingJourney
+                }
+                onClick={() =>
+                  chooseJourney()
+                }
+                className="uf-btn-primary mt-5"
+              >
+
+                {creatingJourney ? (
+                  <>
+                    <LoaderCircle
+                      size={17}
+                      className="mr-2 animate-spin"
+                    />
+
+                    Sélection...
+                  </>
+                ) : (
+                  "Choisir ce trajet"
+                )}
+
+              </button>
+            )}
+
+          </section>
+        )}
+
+      {/* Transports en commun */}
+      {selectedMode ===
+        "transit" && (
+          <section className="mt-5">
+
+            <div className="flex gap-2 overflow-x-auto pb-2">
+
+              {transitModes.map(
                 ({
                   id,
                   label,
-                  icon: Icon,
                 }) => (
                   <button
                     key={id}
                     type="button"
+                    disabled={
+                      journeyStatus ===
+                      "started"
+                    }
                     onClick={() =>
-                      toggleTransitMode(
+                      setTransitMode(
                         id
                       )
                     }
-                    className={`flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 ${
-                      selectedTransitModes.includes(
-                        id
-                      )
+                    className={`shrink-0 rounded-full border px-4 py-2 text-xs font-semibold ${
+                      transitMode ===
+                      id
                         ? "border-primary bg-primary-soft text-primary"
-                        : "border-border bg-white text-muted"
+                        : "border-border bg-surface text-muted"
                     }`}
                   >
-                    <Icon
-                      size={14}
-                    />
-
                     {label}
                   </button>
                 )
@@ -1675,247 +1957,59 @@ export default function JourneyPlanner() {
 
             </div>
 
-          </section>
-        )}
+            <button
+              type="button"
+              onClick={
+                searchTransit
+              }
+              disabled={
+                loadingTransit ||
+                !coordinates.origin ||
+                !coordinates.destination ||
+                journeyStatus ===
+                  "started"
+              }
+              className="uf-btn-primary mt-3"
+            >
 
-      <section className="mt-5">
+              {loadingTransit ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="mr-2 animate-spin"
+                  />
 
-        <div className="h-[520px] overflow-hidden rounded-[24px] border border-border">
+                  Recherche...
+                </>
+              ) : (
+                <>
+                  <TrainFront
+                    size={17}
+                    className="mr-2"
+                  />
 
-          <UrbanFlowMap
-            mode={
-              mapMode
-            }
-            onCoordinatesChange={
-              handleCoordinatesChange
-            }
-            onRouteChange={
-              handleMapboxRouteChange
-            }
-          />
-
-        </div>
-
-      </section>
-
-      {isMapboxMode(
-        selectedMode
-      ) &&
-        mapboxJourney &&
-        mapboxCO2 && (
-          <section className="mt-5">
-
-            <div className="uf-card overflow-hidden">
-
-              <div className="p-5">
-
-                <div className="flex items-center gap-3">
-
-                  {(() => {
-                    const Icon =
-                      getMapboxIcon(
-                        selectedMode
-                      );
-
-                    return (
-                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-primary">
-                        <Icon
-                          size={20}
-                        />
-                      </div>
-                    );
-                  })()}
-
-                  <div className="flex-1">
-
-                    <p className="uf-h3 text-secondary">
-                      {getMapboxModeLabel(
-                        selectedMode
-                      )}
-                    </p>
-
-                    <p className="uf-caption mt-1 text-muted">
-                      Itinéraire recommandé
-                    </p>
-
-                  </div>
-
-                </div>
-
-                <div className="mt-5 grid grid-cols-2 gap-3">
-
-                  <div className="rounded-[16px] bg-background p-3">
-
-                    <p className="uf-caption text-muted">
-                      Durée
-                    </p>
-
-                    <p className="uf-label mt-1 text-secondary">
-                      {formatDuration(
-                        mapboxJourney.duration
-                      )}
-                    </p>
-
-                  </div>
-
-                  <div className="rounded-[16px] bg-background p-3">
-
-                    <p className="uf-caption text-muted">
-                      Distance
-                    </p>
-
-                    <p className="uf-label mt-1 text-secondary">
-                      {formatDistance(
-                        mapboxJourney.distance
-                      )}
-                    </p>
-
-                  </div>
-
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-3">
-
-                  <div className="rounded-[16px] bg-primary-soft p-3">
-
-                    <div className="flex items-center gap-1.5 text-primary">
-
-                      <Leaf
-                        size={15}
-                      />
-
-                      <p className="uf-caption">
-                        CO₂ économisé
-                      </p>
-
-                    </div>
-
-                    <p className="uf-label mt-1 text-primary">
-                      {formatCO2(
-                        mapboxCO2.co2SavedKg
-                      )}
-                    </p>
-
-                  </div>
-
-                  <div className="rounded-[16px] bg-secondary-soft p-3">
-
-                    <div className="flex items-center gap-1.5 text-secondary">
-
-                      <Sparkles
-                        size={15}
-                      />
-
-                      <p className="uf-caption">
-                        FLOWS potentiels
-                      </p>
-
-                    </div>
-
-                    <p className="uf-label mt-1 text-secondary">
-                      +
-                      {
-                        mapboxCO2.flowsPotential
-                      }
-                    </p>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              {!selectedJourneyId && (
-                <div className="border-t border-border p-4">
-
-                  <button
-                    type="button"
-                    onClick={
-                      chooseMapboxJourney
-                    }
-                    disabled={
-                      choosingJourney
-                    }
-                    className="uf-btn-primary flex w-full items-center justify-center gap-2"
-                  >
-
-                    {choosingJourney ? (
-                      <>
-                        <LoaderCircle
-                          size={17}
-                          className="animate-spin"
-                        />
-
-                        Enregistrement...
-                      </>
-                    ) : (
-                      "Choisir ce trajet"
-                    )}
-
-                  </button>
-
-                </div>
+                  Rechercher les transports
+                </>
               )}
 
-              {selectedJourneyId && (
-                <div className="border-t border-border p-4">
-
-                  <div className="flex items-center justify-center gap-2 rounded-[14px] bg-primary-soft px-4 py-3 text-primary">
-
-                    <CheckCircle2
-                      size={18}
-                    />
-
-                    <span className="uf-label">
-                      Trajet choisi
-                    </span>
-
-                  </div>
-
-                </div>
-              )}
-
-            </div>
-
-          </section>
-        )}
-
-      {selectedMode ===
-        "transit" &&
-        coordinates.destination && (
-          <section className="mt-5">
-
-            <h2 className="uf-h3 text-secondary">
-              {selectedJourneyId
-                ? "Votre trajet"
-                : "Itinéraires proposés"}
-            </h2>
-
-            {!selectedJourneyId && (
-              <p className="uf-caption mt-1 text-muted">
-                Les meilleures options selon vos filtres
-              </p>
-            )}
-
-            {transitLoading && (
-              <div className="uf-card mt-4 flex justify-center gap-2 p-6">
-
-                <LoaderCircle
-                  className="animate-spin"
-                  size={18}
-                />
-
-                Recherche...
-              </div>
-            )}
+            </button>
 
             <div className="mt-4 space-y-4">
 
-              {visibleTransitJourneys.map(
-                ({
+              {transitJourneys.map(
+                (
                   journey,
-                  originalIndex,
-                }) => {
+                  index
+                ) => {
+                  if (
+                    selectedTransitIndex !==
+                      null &&
+                    selectedTransitIndex !==
+                      index
+                  ) {
+                    return null;
+                  }
+
                   const segments =
                     buildTransitCO2Segments(
                       journey
@@ -1926,7 +2020,7 @@ export default function JourneyPlanner() {
                       segments
                     );
 
-                  const totalDistance =
+                  const distance =
                     segments.reduce(
                       (
                         total,
@@ -1937,204 +2031,364 @@ export default function JourneyPlanner() {
                       0
                     );
 
+                  const departure =
+                    formatTransitTime(
+                      journey.departureDateTime
+                    );
+
+                  const arrival =
+                    formatTransitTime(
+                      journey.arrivalDateTime
+                    );
+
                   return (
                     <article
-                      key={
-                        originalIndex
-                      }
-                      className="uf-card overflow-hidden"
+                      key={index}
+                      className="uf-card p-5"
                     >
 
-                      <div className="p-4">
+                      {/* Résumé */}
+                      <div className="flex items-start justify-between gap-3">
 
-                        {originalIndex ===
-                          0 && (
-                          <span className="inline-flex rounded-full bg-primary-soft px-3 py-1 text-xs font-semibold text-primary">
-                            Trajet recommandé
-                          </span>
-                        )}
+                        <div>
 
-                        <div className="mt-3 flex justify-between">
+                          <p className="uf-label text-secondary">
+                            Itinéraire en transports
+                          </p>
 
-                          <div>
-                            <p className="uf-caption text-muted">
-                              {journey.transfers ===
-                              0
-                                ? "Sans correspondance"
-                                : `${journey.transfers} correspondance(s)`}
-                            </p>
-                          </div>
+                          {departure &&
+                            arrival && (
+                              <p className="mt-1 text-lg font-bold text-secondary">
+                                {departure}
+                                {" → "}
+                                {arrival}
+                              </p>
+                            )}
 
-                          <div className="text-right">
+                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
 
-                            <p className="uf-h3 text-secondary">
+                            <span className="flex items-center gap-1">
+
+                              <Clock3
+                                size={14}
+                              />
+
                               {formatDuration(
                                 journey.duration
                               )}
-                            </p>
 
-                            <p className="uf-caption text-muted">
-                              {formatTime(
-                                journey.departureDateTime
-                              )}{" "}
-                              →{" "}
-                              {formatTime(
-                                journey.arrivalDateTime
-                              )}
-                            </p>
+                            </span>
 
-                          </div>
+                            {distance >
+                              0 && (
+                              <span>
+                                {formatDistance(
+                                  distance
+                                )}
+                              </span>
+                            )}
 
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-3 gap-2">
-
-                          <div className="rounded-[14px] bg-background p-3">
-
-                            <p className="uf-caption text-muted">
-                              Distance
-                            </p>
-
-                            <p className="uf-label mt-1 text-secondary">
-                              {formatDistance(
-                                totalDistance
-                              )}
-                            </p>
-
-                          </div>
-
-                          <div className="rounded-[14px] bg-primary-soft p-3">
-
-                            <p className="uf-caption text-primary">
-                              CO₂ évité
-                            </p>
-
-                            <p className="uf-label mt-1 text-primary">
-                              {formatCO2(
-                                co2.co2SavedKg
-                              )}
-                            </p>
-
-                          </div>
-
-                          <div className="rounded-[14px] bg-secondary-soft p-3">
-
-                            <p className="uf-caption text-secondary">
-                              FLOWS
-                            </p>
-
-                            <p className="uf-label mt-1 text-secondary">
-                              +
-                              {
-                                co2.flowsPotential
-                              }
-                            </p>
+                            <span>
+                              {journey.transfers ??
+                                0}{" "}
+                              {journey.transfers ===
+                              1
+                                ? "correspondance"
+                                : "correspondances"}
+                            </span>
 
                           </div>
 
                         </div>
+
+                        {ecoPriority &&
+                          index ===
+                            0 && (
+                            <span className="shrink-0 rounded-full bg-primary-soft px-3 py-1 text-[11px] font-semibold text-primary">
+                              Option écologique
+                            </span>
+                          )}
 
                       </div>
 
-                      <div className="border-t border-border p-4">
+                      {/* Étapes détaillées */}
+                      {(journey.sections
+                        ?.length ??
+                        0) >
+                        0 && (
+                        <div className="mt-6">
 
-                        {journey.sections.map(
-                          (
-                            section,
-                            index
-                          ) => {
-                            const presentation =
-                              getSectionPresentation(
-                                section
-                              );
+                          <p className="uf-caption mb-4 font-semibold uppercase tracking-wide text-muted">
+                            Détail du trajet
+                          </p>
 
-                            const Icon =
-                              presentation.icon;
+                          <div>
 
-                            return (
-                              <div
-                                key={
-                                  index
-                                }
-                                className="mb-4 flex gap-3 last:mb-0"
-                              >
+                            {(
+                              journey.sections ??
+                              []
+                            ).map(
+                              (
+                                section,
+                                sectionIndex
+                              ) => {
+                                const Icon =
+                                  getSectionIcon(
+                                    section
+                                  );
 
-                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
-                                  <Icon
-                                    size={16}
-                                  />
-                                </div>
+                                const label =
+                                  getSectionLabel(
+                                    section
+                                  );
 
-                                <div>
+                                const isLast =
+                                  sectionIndex ===
+                                  (journey
+                                    .sections
+                                    ?.length ??
+                                    0) -
+                                    1;
 
-                                  <p className="uf-label text-secondary">
-                                    {
-                                      presentation.title
+                                const sectionMode =
+                                  getTransitEmissionMode(
+                                    section
+                                  );
+
+                                return (
+                                  <div
+                                    key={
+                                      sectionIndex
                                     }
-                                  </p>
+                                    className="flex gap-3"
+                                  >
 
-                                  <p className="uf-caption mt-1 text-muted">
-                                    {
-                                      presentation.subtitle
-                                    }
-                                  </p>
+                                    {/* Timeline */}
+                                    <div className="flex w-10 shrink-0 flex-col items-center">
 
-                                  {!!section.distanceMeters && (
-                                    <p className="uf-caption mt-1 text-subtle">
-                                      {formatDistance(
-                                        section.distanceMeters
+                                      <div
+                                        className={`flex h-9 w-9 items-center justify-center rounded-full ${
+                                          sectionMode ===
+                                          "walking"
+                                            ? "bg-background text-muted"
+                                            : "bg-primary-soft text-primary"
+                                        }`}
+                                      >
+
+                                        <Icon
+                                          size={
+                                            16
+                                          }
+                                        />
+
+                                      </div>
+
+                                      {!isLast && (
+                                        <div className="my-1 min-h-[36px] w-px flex-1 bg-border" />
                                       )}
-                                    </p>
-                                  )}
 
-                                </div>
+                                    </div>
 
-                              </div>
-                            );
-                          }
-                        )}
+                                    {/* Informations */}
+                                    <div
+                                      className={`min-w-0 flex-1 ${
+                                        !isLast
+                                          ? "pb-5"
+                                          : ""
+                                      }`}
+                                    >
 
-                      </div>
+                                      <div className="flex items-start justify-between gap-3">
 
-                      {!selectedJourneyId && (
-                        <div className="border-t border-border p-4">
+                                        <div className="min-w-0">
 
-                          <button
-                            type="button"
-                            disabled={
-                              choosingJourney
-                            }
-                            onClick={() =>
-                              chooseTransitJourney(
-                                journey,
-                                originalIndex
-                              )
-                            }
-                            className="uf-btn-primary w-full"
-                          >
-                            Choisir ce trajet
-                          </button>
+                                          <div className="flex flex-wrap items-center gap-2">
+
+                                            <p className="uf-label text-secondary">
+                                              {label}
+                                            </p>
+
+                                            {section.line &&
+                                              sectionMode !==
+                                                "walking" && (
+                                                <span className="rounded-full bg-secondary-soft px-2 py-0.5 text-[11px] font-bold text-secondary">
+                                                  {
+                                                    section.line
+                                                  }
+                                                </span>
+                                              )}
+
+                                          </div>
+
+                                          {section.direction && (
+                                            <p className="uf-caption mt-1 text-muted">
+                                              Direction{" "}
+                                              {
+                                                section.direction
+                                              }
+                                            </p>
+                                          )}
+
+                                        </div>
+
+                                        {Number(
+                                          section.duration ??
+                                            0
+                                        ) >
+                                          0 && (
+                                          <span className="uf-caption shrink-0 font-medium text-muted">
+                                            {formatDuration(
+                                              Number(
+                                                section.duration
+                                              )
+                                            )}
+                                          </span>
+                                        )}
+
+                                      </div>
+
+                                      {(section.from ||
+                                        section.to) && (
+                                        <div className="mt-2">
+
+                                          {section.from && (
+                                            <p className="uf-caption text-secondary">
+                                              {
+                                                section.from
+                                              }
+                                            </p>
+                                          )}
+
+                                          {section.from &&
+                                            section.to && (
+                                              <div className="my-1 ml-[3px] h-3 border-l border-dashed border-border" />
+                                            )}
+
+                                          {section.to && (
+                                            <p className="uf-caption text-secondary">
+                                              {
+                                                section.to
+                                              }
+                                            </p>
+                                          )}
+
+                                        </div>
+                                      )}
+
+                                      {Number(
+                                        section.distanceMeters ??
+                                          0
+                                      ) >
+                                        0 && (
+                                        <p className="uf-caption mt-2 text-subtle">
+                                          {formatDistance(
+                                            Number(
+                                              section.distanceMeters
+                                            )
+                                          )}
+                                        </p>
+                                      )}
+
+                                    </div>
+
+                                  </div>
+                                );
+                              }
+                            )}
+
+                          </div>
 
                         </div>
                       )}
 
-                      {selectedJourneyIndex ===
-                        originalIndex &&
-                        selectedJourneyId && (
-                          <div className="border-t border-border p-4">
+                      {/* CO2 / FLOWS */}
+                      {(showCO2 ||
+                        showFlows) && (
+                        <div
+                          className={`mt-5 grid gap-3 ${
+                            showCO2 &&
+                            showFlows
+                              ? "grid-cols-2"
+                              : "grid-cols-1"
+                          }`}
+                        >
 
-                            <div className="flex justify-center gap-2 rounded-[14px] bg-primary-soft px-4 py-3 text-primary">
+                          {showCO2 && (
+                            <div className="rounded-[16px] bg-primary-soft p-3">
 
-                              <CheckCircle2
-                                size={18}
+                              <Leaf
+                                size={16}
+                                className="text-primary"
                               />
 
-                              Trajet choisi
+                              <p className="mt-2 font-bold text-primary">
+                                {co2.co2SavedKg.toFixed(
+                                  2
+                                )}{" "}
+                                kg
+                              </p>
+
+                              <p className="uf-caption text-muted">
+                                CO₂ économisé
+                              </p>
 
                             </div>
+                          )}
 
-                          </div>
-                        )}
+                          {showFlows && (
+                            <div className="rounded-[16px] bg-secondary-soft p-3">
+
+                              <Sparkles
+                                size={16}
+                                className="text-secondary"
+                              />
+
+                              <p className="mt-2 font-bold text-secondary">
+                                {
+                                  co2.flowsPotential
+                                }
+                              </p>
+
+                              <p className="uf-caption text-muted">
+                                FLOWS potentiels
+                              </p>
+
+                            </div>
+                          )}
+
+                        </div>
+                      )}
+
+                      {journeyStatus ===
+                        "idle" && (
+                        <button
+                          type="button"
+                          disabled={
+                            creatingJourney
+                          }
+                          onClick={() =>
+                            chooseJourney(
+                              index
+                            )
+                          }
+                          className="uf-btn-primary mt-5"
+                        >
+
+                          {creatingJourney ? (
+                            <>
+                              <LoaderCircle
+                                size={17}
+                                className="mr-2 animate-spin"
+                              />
+
+                              Sélection...
+                            </>
+                          ) : (
+                            "Choisir ce trajet"
+                          )}
+
+                        </button>
+                      )}
 
                     </article>
                   );
@@ -2143,158 +2397,228 @@ export default function JourneyPlanner() {
 
             </div>
 
-            {transitError && (
-              <p className="mt-3 text-sm text-error">
-                {
-                  transitError
-                }
-              </p>
-            )}
+          </section>
+        )}
+
+      {/* Trajet planifié */}
+      {journeyStatus ===
+        "planned" && (
+          <section className="uf-card mt-5 p-5">
+
+            <div className="flex items-center gap-3">
+
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
+
+                <Check
+                  size={18}
+                />
+
+              </div>
+
+              <div>
+
+                <p className="uf-label text-secondary">
+                  Trajet sélectionné
+                </p>
+
+                <p className="uf-caption mt-1 text-muted">
+                  Vous pouvez maintenant démarrer votre déplacement.
+                </p>
+
+              </div>
+
+            </div>
+
+            <button
+              type="button"
+              onClick={
+                startJourney
+              }
+              disabled={
+                startingJourney
+              }
+              className="uf-btn-primary mt-5"
+            >
+
+              {startingJourney ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="mr-2 animate-spin"
+                  />
+
+                  Démarrage...
+                </>
+              ) : (
+                <>
+                  <Navigation
+                    size={17}
+                    className="mr-2"
+                  />
+
+                  Démarrer le trajet
+                </>
+              )}
+
+            </button>
+
+            <button
+  type="button"
+  onClick={
+    cancelSelectedJourney
+  }
+  className="uf-btn-secondary mt-3"
+>
+
+              <RefreshCcw
+                size={16}
+                className="mr-2"
+              />
+
+              Changer de trajet
+
+            </button>
 
           </section>
         )}
 
-      {selectedJourneyId && (
-        <section className="mt-4">
+      {/* En cours */}
+      {journeyStatus ===
+        "started" && (
+          <section className="mt-5 rounded-[24px] bg-secondary p-5 text-white">
 
-          <div className="uf-card p-4">
+            <div className="flex items-center gap-3">
 
-            {!journeyStarted ? (
-              <>
-                <p className="uf-label text-secondary">
-                  Trajet prêt
+              <Navigation
+                size={21}
+              />
+
+              <div>
+
+                <p className="font-semibold">
+                  Trajet en cours
                 </p>
 
-                <p className="uf-caption mt-1 text-muted">
-                  Démarrez lorsque vous êtes prêt à partir.
+                <p className="mt-1 text-xs opacity-80">
+                  Validez votre arrivée une fois à destination.
                 </p>
 
-                <button
-                  type="button"
-                  onClick={
-                    startJourney
-                  }
-                  disabled={
-                    startingJourney
-                  }
-                  className="uf-btn-primary mt-4 flex w-full justify-center gap-2"
-                >
-                  {startingJourney ? (
-                    <>
-                      <LoaderCircle
-                        size={17}
-                        className="animate-spin"
-                      />
-                      Démarrage...
-                    </>
-                  ) : (
-                    <>
-                      <MapPin
-                        size={17}
-                      />
-                      Démarrer le trajet
-                    </>
-                  )}
-                </button>
+              </div>
 
-                <button
-                  type="button"
-                  onClick={
-                    resetJourneySelection
-                  }
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-[14px] border border-border bg-white px-4 py-3 text-sm font-medium text-secondary"
-                >
-                  <RotateCcw
+            </div>
+
+            <button
+              type="button"
+              onClick={
+                completeJourney
+              }
+              disabled={
+                completingJourney
+              }
+              className="mt-5 flex h-[52px] w-full items-center justify-center rounded-[16px] bg-white font-semibold text-secondary"
+            >
+
+              {completingJourney ? (
+                <>
+                  <LoaderCircle
+                    size={17}
+                    className="mr-2 animate-spin"
+                  />
+
+                  Vérification...
+                </>
+              ) : (
+                "Terminer le trajet"
+              )}
+
+            </button>
+
+          </section>
+        )}
+
+      {/* Terminé */}
+      {journeyStatus ===
+        "completed" && (
+          <section className="mt-5 rounded-[24px] bg-primary-soft p-5">
+
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white">
+
+              <Check
+                size={21}
+              />
+
+            </div>
+
+            <h3 className="uf-h3 mt-4 text-secondary">
+              Trajet terminé
+            </h3>
+
+            <p className="uf-body mt-2 text-muted">
+              Votre arrivée a été validée.
+            </p>
+
+            {completionReward && (
+              <div className="mt-4 grid grid-cols-2 gap-3">
+
+                <div className="rounded-[16px] bg-white p-3">
+
+                  <Leaf
                     size={16}
+                    className="text-primary"
                   />
 
-                  Changer de trajet
-                </button>
-              </>
-            ) : !journeyCompleted ? (
-              <>
-                <div className="flex items-center gap-3">
+                  <p className="mt-2 font-bold text-primary">
+                    {Number(
+                      completionReward.co2_saved ??
+                        0
+                    ).toFixed(
+                      2
+                    )}{" "}
+                    kg
+                  </p>
 
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white">
-                    <Check
-                      size={18}
-                    />
-                  </div>
-
-                  <div>
-                    <p className="uf-label text-secondary">
-                      Trajet en cours
-                    </p>
-
-                    <p className="uf-caption mt-1 text-muted">
-                      Votre départ a été enregistré.
-                    </p>
-                  </div>
+                  <p className="uf-caption text-muted">
+                    CO₂ économisé
+                  </p>
 
                 </div>
 
-                <button
-                  type="button"
-                  onClick={
-                    completeJourney
-                  }
-                  disabled={
-                    completingJourney
-                  }
-                  className="uf-btn-primary mt-4 flex w-full justify-center gap-2"
-                >
-                  {completingJourney ? (
-                    <>
-                      <LoaderCircle
-                        size={17}
-                        className="animate-spin"
-                      />
-                      Vérification...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2
-                        size={17}
-                      />
-                      Terminer le trajet
-                    </>
-                  )}
-                </button>
-              </>
-            ) : (
-              <div className="flex items-center gap-3">
+                <div className="rounded-[16px] bg-white p-3">
 
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-white">
-                  <CheckCircle2
-                    size={18}
+                  <Sparkles
+                    size={16}
+                    className="text-secondary"
                   />
-                </div>
 
-                <div>
-                  <p className="uf-label text-secondary">
-                    Trajet terminé
+                  <p className="mt-2 font-bold text-secondary">
+                    {
+                      completionReward.flows_earned ??
+                      0
+                    }
                   </p>
 
-                  <p className="uf-caption mt-1 text-muted">
-                    Votre arrivée a été validée.
+                  <p className="uf-caption text-muted">
+                    FLOWS gagnés
                   </p>
+
                 </div>
 
               </div>
             )}
 
-            {actionError && (
-              <p className="uf-caption mt-3 text-error">
-                {
-                  actionError
-                }
-              </p>
-            )}
+          </section>
+        )}
 
-          </div>
+      {actionError && (
+        <div className="mt-4 rounded-[16px] bg-error/10 p-4">
 
-        </section>
+          <p className="uf-caption text-error">
+            {actionError}
+          </p>
+
+        </div>
       )}
-    </>
+
+    </div>
   );
 }
