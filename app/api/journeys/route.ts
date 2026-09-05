@@ -1,372 +1,362 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
+
+import {
+  calculateCO2,
+  type CO2Segment,
+} from "@/lib/co2/calculateCO2";
+
 import { createClient } from "@/lib/supabase/server";
 
 type CreateJourneyBody = {
-  transportMode: string;
+  transportMode?: string;
 
-  originName?: string | null;
-  destinationName?: string | null;
+  originName?: string;
+  destinationName?: string;
 
-  originLng: number;
-  originLat: number;
+  originLng?: number;
+  originLat?: number;
 
-  destinationLng: number;
-  destinationLat: number;
+  destinationLng?: number;
+  destinationLat?: number;
 
-  estimatedDurationSeconds: number;
+  estimatedDurationSeconds?: number;
+  distanceMeters?: number;
 
-  distanceMeters?: number | null;
-
-  tripCO2?: number;
-  referenceCarCO2?: number;
-  co2Saved?: number;
-
-  /*
-   * Valeur affichée à l'utilisateur.
-   *
-   * ATTENTION :
-   * elle n'est pas encore créditée.
-   */
-  flowsPotential?: number;
+  co2Segments?: CO2Segment[];
 };
-
-function isFiniteNumber(
-  value: unknown
-): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value)
-  );
-}
 
 export async function POST(
   request: NextRequest
 ) {
-  const supabase =
-    await createClient();
-
-  const {
-    data: { user },
-    error: userError,
-  } =
-    await supabase.auth.getUser();
-
-  if (
-    userError ||
-    !user
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Utilisateur non authentifié.",
-      },
-      {
-        status: 401,
-      }
-    );
-  }
-
-  let body: CreateJourneyBody;
-
   try {
-    body =
-      await request.json();
-  } catch {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Corps de requête invalide.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+    const supabase =
+      await createClient();
 
-  const {
-    transportMode,
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
 
-    originName,
-    destinationName,
+    if (
+      userError ||
+      !user
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Utilisateur non authentifié.",
+        },
+        {
+          status: 401,
+        }
+      );
+    }
 
-    originLng,
-    originLat,
+    let body: CreateJourneyBody;
 
-    destinationLng,
-    destinationLat,
+    try {
+      body =
+        await request.json();
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            "Données du trajet invalides.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
 
-    estimatedDurationSeconds,
+    const transportMode =
+      body.transportMode;
 
-    distanceMeters,
+    const originLng =
+      Number(
+        body.originLng
+      );
 
-    tripCO2 = 0,
-    referenceCarCO2 = 0,
-    co2Saved = 0,
+    const originLat =
+      Number(
+        body.originLat
+      );
 
-    flowsPotential = 0,
-  } = body;
+    const destinationLng =
+      Number(
+        body.destinationLng
+      );
 
-  if (
-    !transportMode ||
-    typeof transportMode !==
-      "string"
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Mode de transport invalide.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+    const destinationLat =
+      Number(
+        body.destinationLat
+      );
 
-  if (
-    !isFiniteNumber(
-      originLng
-    ) ||
-    !isFiniteNumber(
-      originLat
-    ) ||
-    !isFiniteNumber(
-      destinationLng
-    ) ||
-    !isFiniteNumber(
-      destinationLat
-    )
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Coordonnées invalides.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+    const duration =
+      Number(
+        body.estimatedDurationSeconds
+      );
 
-  if (
-    !isFiniteNumber(
-      estimatedDurationSeconds
-    ) ||
-    estimatedDurationSeconds <=
-      0
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Durée estimée invalide.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+    const distanceMeters =
+      Number(
+        body.distanceMeters ??
+          0
+      );
 
-  if (
-    distanceMeters !==
-      undefined &&
-    distanceMeters !==
-      null &&
-    (
-      !isFiniteNumber(
-        distanceMeters
+    if (
+      !transportMode ||
+      !Number.isFinite(
+        originLng
       ) ||
-      distanceMeters < 0
-    )
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Distance invalide.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
+      !Number.isFinite(
+        originLat
+      ) ||
+      !Number.isFinite(
+        destinationLng
+      ) ||
+      !Number.isFinite(
+        destinationLat
+      ) ||
+      !Number.isFinite(
+        duration
+      ) ||
+      duration <= 0
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Informations du trajet invalides.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
 
-  if (
-    !isFiniteNumber(
-      tripCO2
-    ) ||
-    !isFiniteNumber(
-      referenceCarCO2
-    ) ||
-    !isFiniteNumber(
-      co2Saved
-    ) ||
-    !isFiniteNumber(
-      flowsPotential
-    )
-  ) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Valeurs environnementales invalides.",
-      },
-      {
-        status: 400,
-      }
-    );
-  }
-
-  /*
-   * Petite sécurité :
-   * aucune valeur environnementale
-   * négative.
-   */
-  const safeTripCO2 =
-    Math.max(
-      0,
-      tripCO2
-    );
-
-  const safeReferenceCO2 =
-    Math.max(
-      0,
-      referenceCarCO2
-    );
-
-  const safeCO2Saved =
-    Math.max(
-      0,
-      co2Saved
-    );
-
-  const safeFlowsPotential =
-    Math.max(
-      0,
-      Math.round(
-        flowsPotential
+    /*
+     * On ne fait PAS confiance à une valeur
+     * co2_saved envoyée par le navigateur.
+     *
+     * On recalcule côté serveur à partir
+     * des segments.
+     */
+    let segments: CO2Segment[] =
+      Array.isArray(
+        body.co2Segments
       )
+        ? body.co2Segments
+            .map(
+              (
+                segment
+              ): CO2Segment => ({
+                mode:
+                  segment.mode,
+
+                distanceMeters:
+                  Number(
+                    segment.distanceMeters ??
+                      0
+                  ),
+              })
+            )
+            .filter(
+              (segment) =>
+                Number.isFinite(
+                  segment.distanceMeters
+                ) &&
+                segment.distanceMeters >
+                  0
+            )
+        : [];
+
+    /*
+     * Sécurité de secours pour Mapbox :
+     * si aucun segment n'arrive mais qu'on
+     * dispose de la distance globale.
+     */
+    if (
+      segments.length === 0 &&
+      distanceMeters > 0
+    ) {
+      if (
+        transportMode ===
+          "walking" ||
+        transportMode ===
+          "cycling" ||
+        transportMode ===
+          "driving"
+      ) {
+        segments = [
+          {
+            mode:
+              transportMode,
+
+            distanceMeters,
+          },
+        ];
+      }
+    }
+
+    const co2 =
+      calculateCO2(
+        segments
+      );
+
+    /*
+     * DEBUG utile :
+     * tu pourras voir ça dans le terminal.
+     */
+    console.log(
+      "UrbanFlow CO2 trajet :",
+      {
+        transportMode,
+        distanceMeters,
+        segments,
+        co2,
+      }
     );
 
-  /*
-   * IMPORTANT :
-   *
-   * flows_earned reste à 0.
-   *
-   * On enregistre uniquement les données
-   * nécessaires à la future récompense.
-   */
-  const {
-    data: journey,
-    error: insertError,
-  } =
-    await supabase
-      .from("journeys")
-      .insert({
-        user_id:
-          user.id,
+    const now =
+      new Date().toISOString();
 
-        status:
-          "planned",
+    const {
+      data: journey,
+      error: insertError,
+    } =
+      await supabase
+        .from("journeys")
+        .insert({
+          user_id:
+            user.id,
 
-        transport_mode:
-          transportMode,
+          status:
+            "planned",
 
-        origin_name:
-          originName ??
-          null,
+          transport_mode:
+            transportMode,
 
-        destination_name:
-          destinationName ??
-          null,
+          origin_name:
+            body.originName ??
+            "Point de départ",
 
-        origin_lng:
-          originLng,
+          destination_name:
+            body.destinationName ??
+            "Destination",
 
-        origin_lat:
-          originLat,
+          origin_lng:
+            originLng,
 
-        destination_lng:
-          destinationLng,
+          origin_lat:
+            originLat,
 
-        destination_lat:
-          destinationLat,
+          destination_lng:
+            destinationLng,
 
-        estimated_duration_seconds:
-          Math.round(
-            estimatedDurationSeconds
-          ),
+          destination_lat:
+            destinationLat,
 
-        distance_meters:
-          distanceMeters ??
-          null,
+          estimated_duration_seconds:
+            Math.round(
+              duration
+            ),
 
-        trip_co2:
-          safeTripCO2,
+          distance_meters:
+            Math.max(
+              0,
+              distanceMeters
+            ),
 
-        reference_car_co2:
-          safeReferenceCO2,
+          co2_segments:
+            segments,
 
-        co2_saved:
-          safeCO2Saved,
+          /*
+           * Ces 3 valeurs doivent être
+           * persistées AVANT la validation.
+           */
+          trip_co2:
+            co2.tripCO2Kg,
 
-        /*
-         * Ne surtout pas créditer ici.
-         */
-        flows_earned:
-          0,
+          reference_car_co2:
+            co2.referenceCarCO2Kg,
 
-        rewarded_at:
-          null,
-      })
-      .select()
-      .single();
+          co2_saved:
+            co2.co2SavedKg,
 
-  if (
-    insertError ||
-    !journey
-  ) {
-    console.error(
-      "Erreur création trajet :",
+          /*
+           * Les FLOWS ne sont crédités
+           * qu'après validation.
+           */
+          flows_earned:
+            0,
+
+          rewarded_at:
+            null,
+
+          created_at:
+            now,
+
+          updated_at:
+            now,
+        })
+        .select()
+        .single();
+
+    if (
       insertError
+    ) {
+      console.error(
+        "Erreur création trajet :",
+        insertError
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "Impossible d'enregistrer le trajet.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    return NextResponse.json(
+      {
+        success:
+          true,
+
+        journey,
+
+        potentialReward: {
+          co2Saved:
+            co2.co2SavedKg,
+
+          flows:
+            co2.flowsPotential,
+        },
+      },
+      {
+        status: 201,
+      }
+    );
+  } catch (error) {
+    console.error(
+      "Erreur route création trajet :",
+      error
     );
 
     return NextResponse.json(
       {
-        success: false,
-
         error:
-          "Impossible d'enregistrer le trajet.",
-
-        details:
-          insertError?.message ??
-          null,
+          "Une erreur est survenue lors de la création du trajet.",
       },
       {
         status: 500,
       }
     );
   }
-
-  return NextResponse.json(
-    {
-      success: true,
-
-      journey,
-
-      rewardsPreview: {
-        co2Saved:
-          safeCO2Saved,
-
-        flowsPotential:
-          safeFlowsPotential,
-      },
-    },
-    {
-      status: 201,
-    }
-  );
 }

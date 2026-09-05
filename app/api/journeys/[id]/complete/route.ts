@@ -5,11 +5,6 @@ import {
   
   import { createClient } from "@/lib/supabase/server";
   
-  type CompleteJourneyBody = {
-    latitude: number;
-    longitude: number;
-  };
-  
   function toRadians(
     value: number
   ) {
@@ -27,7 +22,7 @@ import {
     lng2: number
   ) {
     const earthRadius =
-      6371000;
+      6_371_000;
   
     const dLat =
       toRadians(
@@ -42,28 +37,28 @@ import {
     const a =
       Math.sin(
         dLat / 2
-      ) *
-        Math.sin(
-          dLat / 2
-        ) +
+      ) ** 2 +
       Math.cos(
-        toRadians(lat1)
+        toRadians(
+          lat1
+        )
       ) *
         Math.cos(
-          toRadians(lat2)
+          toRadians(
+            lat2
+          )
         ) *
         Math.sin(
           dLng / 2
-        ) *
-        Math.sin(
-          dLng / 2
-        );
+        ) ** 2;
   
     const c =
       2 *
       Math.atan2(
         Math.sqrt(a),
-        Math.sqrt(1 - a)
+        Math.sqrt(
+          1 - a
+        )
       );
   
     return (
@@ -80,373 +75,377 @@ import {
       }>;
     }
   ) {
-    const { id } =
-      await context.params;
-  
-    const supabase =
-      await createClient();
-  
-    /*
-     * Utilisateur connecté
-     */
-    const {
-      data: { user },
-      error: userError,
-    } =
-      await supabase.auth.getUser();
-  
-    if (
-      userError ||
-      !user
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Utilisateur non authentifié.",
-        },
-        {
-          status: 401,
-        }
-      );
-    }
-  
-    /*
-     * Corps de requête
-     */
-    let body: CompleteJourneyBody;
-  
     try {
-      body =
-        await request.json();
-    } catch {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Corps de requête invalide.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
+      const supabase =
+        await createClient();
   
-    const {
-      latitude,
-      longitude,
-    } = body;
+      const {
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
   
-    if (
-      typeof latitude !==
-        "number" ||
-      typeof longitude !==
-        "number" ||
-      !Number.isFinite(
-        latitude
-      ) ||
-      !Number.isFinite(
-        longitude
-      )
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Position GPS invalide.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
+      if (
+        userError ||
+        !user
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Utilisateur non authentifié.",
+          },
+          {
+            status: 401,
+          }
+        );
+      }
   
-    /*
-     * Récupération du trajet
-     */
-    const {
-      data: journey,
-      error: journeyError,
-    } =
-      await supabase
-        .from("journeys")
-        .select(
-          `
+      const {
+        id,
+      } =
+        await context.params;
+  
+      if (!id) {
+        return NextResponse.json(
+          {
+            error:
+              "Identifiant du trajet manquant.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      let body: {
+        lat?: number;
+        lng?: number;
+      };
+  
+      try {
+        body =
+          await request.json();
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              "Position GPS invalide.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      /*
+       * IMPORTANT :
+       * conversion explicite en Number
+       */
+      const lat =
+        Number(body.lat);
+  
+      const lng =
+        Number(body.lng);
+  
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lng) ||
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        console.error(
+          "Position GPS invalide :",
+          body
+        );
+  
+        return NextResponse.json(
+          {
+            error:
+              "Position GPS invalide.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      const {
+        data: journey,
+        error: journeyError,
+      } =
+        await supabase
+          .from("journeys")
+          .select(`
             id,
             user_id,
             status,
+            destination_lat,
+            destination_lng,
             started_at,
             rewarded_at,
-            destination_lat,
-            destination_lng
-          `
+            co2_saved
+          `)
+          .eq(
+            "id",
+            id
+          )
+          .eq(
+            "user_id",
+            user.id
+          )
+          .single();
+  
+      if (
+        journeyError ||
+        !journey
+      ) {
+        console.error(
+          "Erreur récupération trajet :",
+          journeyError
+        );
+  
+        return NextResponse.json(
+          {
+            error:
+              "Trajet introuvable.",
+          },
+          {
+            status: 404,
+          }
+        );
+      }
+  
+      if (
+        journey.status !==
+        "started"
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Ce trajet n'est pas en cours.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      if (
+        !journey.started_at
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Le trajet n'a pas été démarré correctement.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      if (
+        journey.rewarded_at
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Ce trajet a déjà été récompensé.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      const destinationLat =
+        Number(
+          journey.destination_lat
+        );
+  
+      const destinationLng =
+        Number(
+          journey.destination_lng
+        );
+  
+      if (
+        !Number.isFinite(
+          destinationLat
+        ) ||
+        !Number.isFinite(
+          destinationLng
         )
-        .eq(
-          "id",
-          id
-        )
-        .eq(
-          "user_id",
-          user.id
-        )
-        .single();
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "Destination du trajet invalide.",
+          },
+          {
+            status: 500,
+          }
+        );
+      }
   
-    if (
-      journeyError ||
-      !journey
-    ) {
+      const distanceToDestination =
+        calculateDistanceMeters(
+          lat,
+          lng,
+          destinationLat,
+          destinationLng
+        );
+  
+      const maxDistanceMeters =
+        200;
+  
+      if (
+        distanceToDestination >
+        maxDistanceMeters
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              `Vous êtes encore à environ ${Math.round(
+                distanceToDestination
+              )} m de votre destination.`,
+  
+            distanceToDestination:
+              Math.round(
+                distanceToDestination
+              ),
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+  
+      const completedAt =
+        new Date().toISOString();
+  
+      const {
+        error: completionError,
+      } =
+        await supabase
+          .from("journeys")
+          .update({
+            status:
+              "completed",
+  
+            completed_at:
+              completedAt,
+  
+            end_lat:
+              lat,
+  
+            end_lng:
+              lng,
+  
+            updated_at:
+              completedAt,
+          })
+          .eq(
+            "id",
+            journey.id
+          )
+          .eq(
+            "user_id",
+            user.id
+          )
+          .eq(
+            "status",
+            "started"
+          );
+  
+      if (
+        completionError
+      ) {
+        console.error(
+          "Erreur validation trajet :",
+          completionError
+        );
+  
+        return NextResponse.json(
+          {
+            error:
+              "Impossible de terminer le trajet.",
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+  
+      const {
+        data: rewardData,
+        error: rewardError,
+      } =
+        await supabase.rpc(
+          "reward_completed_journey",
+          {
+            p_journey_id:
+              journey.id,
+          }
+        );
+  
+      if (
+        rewardError
+      ) {
+        console.error(
+          "Erreur attribution récompense :",
+          rewardError
+        );
+  
+        return NextResponse.json(
+          {
+            error:
+              "Le trajet a été validé, mais les FLOWS n'ont pas pu être attribués.",
+  
+            journeyCompleted:
+              true,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+  
       return NextResponse.json(
         {
-          success: false,
-          error:
-            "Trajet introuvable.",
-        },
-        {
-          status: 404,
-        }
-      );
-    }
+          success:
+            true,
   
-    /*
-     * Le trajet doit avoir été démarré.
-     */
-    if (
-      journey.status !==
-      "started"
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Ce trajet n'est pas en cours.",
-        },
-        {
-          status: 409,
-        }
-      );
-    }
-  
-    /*
-     * Sécurité anti-double récompense.
-     */
-    if (
-      journey.rewarded_at
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Ce trajet a déjà été récompensé.",
-        },
-        {
-          status: 409,
-        }
-      );
-    }
-  
-    /*
-     * On vérifie qu'une heure de départ
-     * existe bien, sans imposer de durée
-     * minimale.
-     */
-    if (
-      !journey.started_at
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Heure de départ introuvable.",
-        },
-        {
-          status: 409,
-        }
-      );
-    }
-  
-    /*
-     * Vérification de proximité
-     * avec la destination.
-     *
-     * MVP UrbanFlow :
-     * maximum 200 mètres.
-     */
-    const distanceToDestination =
-      calculateDistanceMeters(
-        latitude,
-        longitude,
-        journey.destination_lat,
-        journey.destination_lng
-      );
-  
-    const maximumDistanceMeters =
-      200;
-  
-    if (
-      distanceToDestination >
-      maximumDistanceMeters
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-  
-          error:
-            `Vous êtes encore à ${Math.round(
-              distanceToDestination
-            )} m de la destination.`,
-  
-          reason:
-            "too_far_from_destination",
+          journeyCompleted:
+            true,
   
           distanceToDestination:
             Math.round(
               distanceToDestination
             ),
   
-          maximumDistanceMeters,
+          reward:
+            rewardData,
         },
         {
-          status: 400,
+          status: 200,
         }
       );
-    }
-  
-    /*
-     * Le trajet est considéré comme terminé.
-     */
-    const completedAt =
-      new Date().toISOString();
-  
-    const {
-      data: updatedJourney,
-      error: updateError,
-    } =
-      await supabase
-        .from("journeys")
-        .update({
-          status:
-            "completed",
-  
-          completed_at:
-            completedAt,
-  
-          end_lat:
-            latitude,
-  
-          end_lng:
-            longitude,
-        })
-        .eq(
-          "id",
-          id
-        )
-        .eq(
-          "user_id",
-          user.id
-        )
-        .eq(
-          "status",
-          "started"
-        )
-        .select()
-        .single();
-  
-    if (
-      updateError ||
-      !updatedJourney
-    ) {
+    } catch (error) {
       console.error(
-        "Erreur fin trajet :",
-        updateError
+        "Erreur route complete journey :",
+        error
       );
   
       return NextResponse.json(
         {
-          success: false,
-  
           error:
-            "Impossible de terminer le trajet.",
-  
-          details:
-            updateError?.message ??
-            null,
+            "Une erreur est survenue lors de la validation du trajet.",
         },
         {
           status: 500,
         }
       );
     }
-  
-    /*
-     * Crédit CO₂ + FLOWS.
-     *
-     * La fonction PostgreSQL vérifie
-     * également que le trajet n'a pas
-     * déjà été récompensé.
-     */
-    const {
-      data: reward,
-      error: rewardError,
-    } =
-      await supabase.rpc(
-        "reward_completed_journey",
-        {
-          p_journey_id:
-            id,
-        }
-      );
-  
-    if (
-      rewardError
-    ) {
-      console.error(
-        "Erreur récompense trajet :",
-        rewardError
-      );
-  
-      /*
-       * Le trajet reste completed.
-       *
-       * Cela permet de ne pas perdre
-       * la validation du trajet si
-       * le crédit de la récompense
-       * rencontre un problème.
-       */
-      return NextResponse.json(
-        {
-          success: false,
-  
-          journeyCompleted:
-            true,
-  
-          error:
-            "Le trajet a été validé, mais la récompense n'a pas pu être créditée.",
-  
-          details:
-            rewardError.message,
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-  
-    /*
-     * Tout est validé.
-     */
-    return NextResponse.json({
-      success: true,
-  
-      journey:
-        updatedJourney,
-  
-      reward,
-  
-      validation: {
-        distanceToDestination:
-          Math.round(
-            distanceToDestination
-          ),
-      },
-    });
   }
