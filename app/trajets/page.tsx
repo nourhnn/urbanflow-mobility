@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import BottomNavigation from "@/components/layout/BottomNavigation";
 import JourneyHistory from "@/components/journey/JourneyHistory";
 import JourneyPlanner from "@/components/journey/JourneyPlanner";
@@ -5,7 +7,6 @@ import JourneyPlanner from "@/components/journey/JourneyPlanner";
 export default function TrajetsPage() {
   return (
     <main className="min-h-screen bg-background pb-28">
-
       <div className="mx-auto w-full max-w-[430px] px-5 pt-7">
 
         <header>
@@ -18,14 +19,23 @@ export default function TrajetsPage() {
           </h1>
         </header>
 
-        <JourneyPlanner />
+        <Suspense
+          fallback={
+            <div className="mt-8 flex items-center justify-center py-10">
+              <p className="uf-body text-muted">
+                Chargement du planificateur...
+              </p>
+            </div>
+          }
+        >
+          <JourneyPlanner />
+        </Suspense>
 
         <JourneyHistory />
 
       </div>
 
       <BottomNavigation />
-
     </main>
   );
 }
