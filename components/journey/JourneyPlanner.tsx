@@ -25,7 +25,9 @@ import {
   useState,
 } from "react";
 
-import UrbanFlowMap, {
+import dynamic from "next/dynamic";
+
+import type {
   JourneyCoordinates,
   JourneyPoint,
   MapboxJourneyData,
@@ -39,6 +41,25 @@ import {
 
 import { canUseLocation } from "@/lib/privacy/location";
 import { createClient } from "@/lib/supabase/client";
+
+const UrbanFlowMap = dynamic(
+  () =>
+    import(
+      "@/components/map/UrbanFlowMap"
+    ),
+  {
+    ssr: false,
+
+    loading: () => (
+      <div className="uf-card mt-5 flex h-[330px] items-center justify-center">
+        <LoaderCircle
+          size={22}
+          className="animate-spin text-primary"
+        />
+      </div>
+    ),
+  }
+);
 
 type ModeId =
   | "walking"
