@@ -1,66 +1,60 @@
 import {
   Bike,
+  Car,
   CheckCircle2,
   Footprints,
   Leaf,
+  Route,
   Sparkles,
-  Target,
   TrainFront,
-  Trophy,
 } from "lucide-react";
-
-import { redirect } from "next/navigation";
 
 import BottomNavigation from "@/components/layout/BottomNavigation";
 import { createClient } from "@/lib/supabase/server";
 
 type Journey = {
   id: string;
+  status: string;
   transport_mode: string;
   distance_meters: number | null;
   co2_saved: number | null;
-  status: string;
+  flows_earned: number | null;
 };
 
 type Challenge = {
-  id: string;
   title: string;
   description: string;
-  icon: typeof Target;
   current: number;
   target: number;
   unit: string;
   completed: boolean;
+  icon: typeof Leaf;
 };
 
-function formatNumber(
-  value: number,
-  digits = 1
+function formatDistance(
+  distanceMeters: number
 ) {
-  return new Intl.NumberFormat(
-    "fr-FR",
-    {
-      maximumFractionDigits:
-        digits,
-    }
-  ).format(value);
-}
-
-function calculateProgress(
-  current: number,
-  target: number
-) {
-  if (target <= 0) {
-    return 0;
+  if (distanceMeters < 1000) {
+    return `${Math.round(distanceMeters)} m`;
   }
 
-  return Math.min(
-    100,
-    Math.round(
-      (current / target) *
-        100
-    )
-  );
+  return `${(distanceMeters / 1000).toFixed(1)} km`;
+}
+
+function formatChallengeProgress(
+  current: number,
+  target: number,
+  unit: string
+) {
+  if (unit === "kg") {
+    return `${current.toFixed(1)} / ${target} kg`;
+  }
+
+  if (unit === "km") {
+    return `${current.toFixed(1)} / ${target} km`;
+  }
+
+  return `${Math.round(current)} / ${target}`;
 }
 
 export default async function RecompensesPage() {
@@ -73,54 +67,71 @@ export default async function RecompensesPage() {
     await supabase.auth.getUser();
 
   if (!user) {
-    redirect("/connexion");
+    return null;
   }
 
-  const [
-    profileResult,
-    journeysResult,
-  ] =
-    await Promise.all([
-      supabase
-        .from("profiles")
-        .select(`
-          flows,
-          co2_saved
-        `)
-        .eq(
-          "id",
-          user.id
-        )
-        .single(),
+  /*
+   * Profil utilisateur
+   */
+  const {
+    data: profile,
+  } =
+    await supabase
+      .from("profiles")
+      .select(`
+        flows,
+        co2_saved
+      `)
+      .eq(
+        "id",
+        user.id
+      )
+      .single();
 
-      supabase
-        .from("journeys")
-        .select(`
-          id,
-          transport_mode,
-          distance_meters,
-          co2_saved,
-          status
-        `)
-        .eq(
-          "user_id",
-          user.id
-        )
-        .eq(
-          "status",
-          "rewarded"
-        ),
-    ]);
-
-  const profile =
-    profileResult.data;
+  /*
+   * Trajets validés / récompensés
+   */
+  const {
+    data: journeysData,
+  } =
+    await supabase
+      .from("journeys")
+      .select(`
+        id,
+        status,
+        transport_mode,
+        distance_meters,
+        co2_saved,
+        flows_earned
+      `)
+      .eq(
+        "user_id",
+        user.id
+      )
+      .eq(
+        "status",
+        "rewarded"
+      )
+      .order(
+        "created_at",
+        {
+          ascending:
+            false,
+        }
+      );
 
   const journeys =
-    (journeysResult.data ??
+    (journeysData ??
       []) as Journey[];
 
-  const validatedJourneys =
-    journeys.length;
+  /*
+   * Statistiques générales
+   */
+  const totalFlows =
+    Number(
+      profile?.flows ??
+        0
+    );
 
   const totalCO2Saved =
     Number(
@@ -128,11 +139,8 @@ export default async function RecompensesPage() {
         0
     );
 
-  const totalFlows =
-    Number(
-      profile?.flows ??
-        0
-    );
+  const totalJourneys =
+    journeys.length;
 
   const totalDistanceMeters =
     journeys.reduce(
@@ -148,11 +156,10 @@ export default async function RecompensesPage() {
       0
     );
 
-  const totalDistanceKm =
-    totalDistanceMeters /
-    1000;
-
-  const cyclingDistanceKm =
+  /*
+   * Statistiques par mode
+   */
+  const bikeDistanceMeters =
     journeys
       .filter(
         (journey) =>
@@ -170,9 +177,9 @@ export default async function RecompensesPage() {
               0
           ),
         0
-      ) / 1000;
+      );
 
-  const walkingDistanceKm =
+  const walkingDistanceMeters =
     journeys
       .filter(
         (journey) =>
@@ -190,111 +197,172 @@ export default async function RecompensesPage() {
               0
           ),
         0
-      ) / 1000;
+      );
 
   const transitJourneys =
     journeys.filter(
       (journey) =>
-        [
-          "transit",
-          "metro",
-          "bus",
-          "tram",
-          "train",
-          "multimodal",
-        ].includes(
-          journey.transport_mode
-        )
+        journey.transport_mode ===
+          "transit" ||
+        journey.transport_mode ===
+          "metro" ||
+        journey.transport_mode ===
+          "bus" ||
+        journey.transport_mode ===
+          "tram" ||
+        journey.transport_mode ===
+          "train"
     ).length;
 
+  const bikeDistanceKm =
+    bikeDistanceMeters /
+    1000;
+
+  const walkingDistanceKm =
+    walkingDistanceMeters /
+    1000;
+
+  /*
+   * Équivalence CO₂
+   *
+   * UrbanFlow utilise déjà une voiture
+   * thermique de référence à 0,192 kg
+   * de CO₂ par kilomètre.
+   */
+  const CAR_CO2_KG_PER_KM =
+    0.192;
+
+  const avoidedCarKm =
+    totalCO2Saved > 0
+      ? totalCO2Saved /
+        CAR_CO2_KG_PER_KM
+      : 0;
+
+  /*
+   * Défis UrbanFlow
+   */
   const challenges: Challenge[] =
     [
       {
-        id: "eco-start",
         title:
           "Éco-départ",
+
         description:
-          "Effectuer 3 trajets responsables.",
-        icon: Leaf,
+          "Validez 3 trajets responsables.",
+
         current:
-          validatedJourneys,
-        target: 3,
+          totalJourneys,
+
+        target:
+          3,
+
         unit:
           "trajets",
+
         completed:
-          validatedJourneys >=
+          totalJourneys >=
           3,
+
+        icon:
+          Leaf,
       },
+
       {
-        id: "bike",
         title:
           "Roulez vert",
+
         description:
-          "Parcourir 10 km à vélo.",
-        icon: Bike,
+          "Parcourez 10 km à vélo.",
+
         current:
-          cyclingDistanceKm,
-        target: 10,
-        unit: "km",
-        completed:
-          cyclingDistanceKm >=
+          bikeDistanceKm,
+
+        target:
           10,
+
+        unit:
+          "km",
+
+        completed:
+          bikeDistanceKm >=
+          10,
+
+        icon:
+          Bike,
       },
+
       {
-        id: "co2",
         title:
           "Mobilité durable",
+
         description:
-          "Économiser 5 kg de CO₂.",
-        icon: Leaf,
+          "Économisez 5 kg de CO₂.",
+
         current:
           totalCO2Saved,
-        target: 5,
+
+        target:
+          5,
+
         unit:
           "kg",
+
         completed:
-          totalCO2Saved >= 5,
+          totalCO2Saved >=
+          5,
+
+        icon:
+          Leaf,
       },
+
       {
-        id: "walking",
         title:
           "Marche active",
+
         description:
-          "Parcourir 5 km à pied.",
-        icon:
-          Footprints,
+          "Parcourez 5 km à pied.",
+
         current:
           walkingDistanceKm,
-        target: 5,
-        unit: "km",
+
+        target:
+          5,
+
+        unit:
+          "km",
+
         completed:
           walkingDistanceKm >=
           5,
+
+        icon:
+          Footprints,
       },
+
       {
-        id: "transit",
         title:
           "Transport malin",
+
         description:
-          "Effectuer 5 trajets en transports en commun.",
-        icon:
-          TrainFront,
+          "Effectuez 5 trajets en transports en commun.",
+
         current:
           transitJourneys,
-        target: 5,
+
+        target:
+          5,
+
         unit:
           "trajets",
+
         completed:
           transitJourneys >=
           5,
+
+        icon:
+          TrainFront,
       },
     ];
-
-  const activeChallenges =
-    challenges.filter(
-      (challenge) =>
-        !challenge.completed
-    );
 
   const completedChallenges =
     challenges.filter(
@@ -302,158 +370,226 @@ export default async function RecompensesPage() {
         challenge.completed
     );
 
+  const activeChallenges =
+    challenges.filter(
+      (challenge) =>
+        !challenge.completed
+    );
+
   return (
     <main className="min-h-screen bg-background pb-28">
-      <div className="mx-auto w-full max-w-[430px] px-5 pt-7">
 
+      <div className="mx-auto w-full max-w-[430px] px-5 pb-8 pt-7">
+
+        {/* Header */}
         <header>
-          <p className="uf-body text-muted">
-            Votre progression
-          </p>
 
-          <h1 className="uf-h2 mt-1 text-secondary">
-            Impact
-          </h1>
-        </header>
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft text-primary">
 
-        {/* Carte principale */}
-        <section className="mt-6 rounded-[24px] bg-primary p-5 text-white">
-
-          <div className="flex items-center justify-between">
-
-            <div>
-              <p className="text-sm opacity-80">
-                Score UrbanFlow
-              </p>
-
-              <p className="mt-1 text-3xl font-bold">
-                {totalFlows}
-              </p>
-
-              <p className="mt-1 text-sm opacity-80">
-                FLOWS
-              </p>
-            </div>
-
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/15">
-              <Sparkles
-                size={24}
-              />
-            </div>
-
-          </div>
-
-          <div className="mt-5 grid grid-cols-2 gap-3">
-
-            <div className="rounded-[18px] bg-white/10 p-4">
-              <p className="text-2xl font-semibold">
-                {
-                  validatedJourneys
-                }
-              </p>
-
-              <p className="mt-1 text-xs opacity-80">
-                trajets validés
-              </p>
-            </div>
-
-            <div className="rounded-[18px] bg-white/10 p-4">
-              <p className="text-2xl font-semibold">
-                {formatNumber(
-                  totalCO2Saved
-                )}{" "}
-                kg
-              </p>
-
-              <p className="mt-1 text-xs opacity-80">
-                CO₂ économisé
-              </p>
-            </div>
-
-          </div>
-
-        </section>
-
-        {/* Impact */}
-        <section className="mt-8">
-
-          <div className="flex items-center gap-2">
             <Leaf
-              size={18}
-              className="text-primary"
+              size={22}
             />
 
-            <h2 className="uf-h3 text-secondary">
-              Votre impact
-            </h2>
           </div>
+
+          <h1 className="uf-h1 mt-4 text-secondary">
+            Mon impact
+          </h1>
+
+          <p className="uf-body mt-2 text-muted">
+            Suivez l&apos;impact positif de vos déplacements et progressez dans vos défis.
+          </p>
+
+        </header>
+
+        {/* Statistiques principales */}
+        <section className="mt-8">
+
+          <h2 className="uf-h3 text-secondary">
+            Votre bilan
+          </h2>
 
           <div className="mt-4 grid grid-cols-2 gap-3">
 
-            <article className="uf-card p-4">
+            <div className="uf-card p-4">
 
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
+
                 <Leaf
                   size={18}
                 />
+
               </div>
 
-              <p className="mt-4 text-xl font-bold text-secondary">
-                {formatNumber(
-                  totalCO2Saved
-                )}{" "}
-                kg
+              <p className="mt-4 text-2xl font-bold text-secondary">
+                {totalCO2Saved.toFixed(
+                  2
+                )}
               </p>
 
               <p className="uf-caption mt-1 text-muted">
-                de CO₂ économisé
+                kg CO₂ économisés
               </p>
 
-            </article>
+            </div>
 
-            <article className="uf-card p-4">
+            <div className="uf-card p-4">
 
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary-soft text-secondary">
-                <Target
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-soft text-accent">
+
+                <Sparkles
                   size={18}
                 />
+
               </div>
 
-              <p className="mt-4 text-xl font-bold text-secondary">
-                {formatNumber(
-                  totalDistanceKm
-                )}{" "}
-                km
+              <p className="mt-4 text-2xl font-bold text-secondary">
+                {totalFlows}
               </p>
 
               <p className="uf-caption mt-1 text-muted">
-                parcourus responsablement
+                FLOWS
               </p>
 
-            </article>
+            </div>
+
+            <div className="uf-card p-4">
+
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary-soft text-secondary">
+
+                <Route
+                  size={18}
+                />
+
+              </div>
+
+              <p className="mt-4 text-2xl font-bold text-secondary">
+                {totalJourneys}
+              </p>
+
+              <p className="uf-caption mt-1 text-muted">
+                trajets validés
+              </p>
+
+            </div>
+
+            <div className="uf-card p-4">
+
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
+
+                <Footprints
+                  size={18}
+                />
+
+              </div>
+
+              <p className="mt-4 text-2xl font-bold text-secondary">
+                {formatDistance(
+                  totalDistanceMeters
+                )}
+              </p>
+
+              <p className="uf-caption mt-1 text-muted">
+                mobilité responsable
+              </p>
+
+            </div>
 
           </div>
 
         </section>
 
-        {/* Défis en cours */}
+        {/* Impact en perspective */}
         <section className="mt-8">
 
-          <div className="flex items-center gap-2">
+          <h2 className="uf-h3 text-secondary">
+            Votre impact en perspective
+          </h2>
 
-            <Target
-              size={18}
-              className="text-primary"
-            />
+          <div className="uf-card mt-4 p-5">
+
+            <div className="flex items-start gap-4">
+
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+
+                <Car
+                  size={21}
+                />
+
+              </div>
+
+              <div className="min-w-0 flex-1">
+
+                <p className="uf-label text-secondary">
+                  {totalCO2Saved.toFixed(
+                    2
+                  )}{" "}
+                  kg de CO₂ économisés
+                </p>
+
+                {totalCO2Saved >
+                0 ? (
+                  <p className="uf-body mt-2 text-muted">
+                    Cela correspond à environ{" "}
+                    <span className="font-semibold text-primary">
+                      {Math.round(
+                        avoidedCarKm
+                      )}{" "}
+                      km
+                    </span>{" "}
+                    parcourus en voiture thermique.
+                  </p>
+                ) : (
+                  <p className="uf-body mt-2 text-muted">
+                    Validez vos premiers trajets responsables pour visualiser votre impact.
+                  </p>
+                )}
+
+                <div className="mt-4 flex items-start gap-2">
+
+                  <Leaf
+                    size={16}
+                    className="mt-0.5 shrink-0 text-primary"
+                  />
+
+                  <p className="uf-caption text-muted">
+                    Cette équivalence permet de rendre vos économies de CO₂ plus concrètes.
+                  </p>
+
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* Progression */}
+        <section className="mt-8">
+
+          <div className="flex items-center justify-between">
 
             <h2 className="uf-h3 text-secondary">
-              Défis en cours
+              Défis
             </h2>
+
+            <p className="uf-caption font-semibold text-primary">
+              {
+                completedChallenges.length
+              }
+              /
+              {
+                challenges.length
+              }{" "}
+              terminés
+            </p>
 
           </div>
 
           {activeChallenges.length >
-          0 ? (
+          0 && (
             <div className="mt-4 space-y-3">
 
               {activeChallenges.map(
@@ -463,16 +599,21 @@ export default async function RecompensesPage() {
                   const Icon =
                     challenge.icon;
 
-                  const progress =
-                    calculateProgress(
-                      challenge.current,
-                      challenge.target
+                  const percentage =
+                    Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        (challenge.current /
+                          challenge.target) *
+                          100
+                      )
                     );
 
                   return (
-                    <article
+                    <div
                       key={
-                        challenge.id
+                        challenge.title
                       }
                       className="uf-card p-5"
                     >
@@ -480,9 +621,11 @@ export default async function RecompensesPage() {
                       <div className="flex items-start gap-4">
 
                         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+
                           <Icon
                             size={19}
                           />
+
                         </div>
 
                         <div className="min-w-0 flex-1">
@@ -490,6 +633,7 @@ export default async function RecompensesPage() {
                           <div className="flex items-start justify-between gap-3">
 
                             <div>
+
                               <p className="uf-label text-secondary">
                                 {
                                   challenge.title
@@ -501,59 +645,28 @@ export default async function RecompensesPage() {
                                   challenge.description
                                 }
                               </p>
+
                             </div>
 
-                            <span className="uf-caption shrink-0 font-semibold text-primary">
-                              {
-                                progress
-                              }
-                              %
-                            </span>
+                            <p className="uf-caption shrink-0 font-semibold text-primary">
+                              {formatChallengeProgress(
+                                challenge.current,
+                                challenge.target,
+                                challenge.unit
+                              )}
+                            </p>
 
                           </div>
 
-                          <div className="mt-4 h-2 overflow-hidden rounded-full bg-border">
+                          <div className="mt-4 h-2 overflow-hidden rounded-full bg-primary-soft">
 
                             <div
                               className="h-full rounded-full bg-primary transition-all"
                               style={{
-                                width: `${progress}%`,
+                                width:
+                                  `${percentage}%`,
                               }}
                             />
-
-                          </div>
-
-                          <div className="mt-2 flex items-center justify-between">
-
-                            <p className="uf-caption text-muted">
-                              {formatNumber(
-                                Math.min(
-                                  challenge.current,
-                                  challenge.target
-                                )
-                              )}{" "}
-                              /{" "}
-                              {
-                                challenge.target
-                              }{" "}
-                              {
-                                challenge.unit
-                              }
-                            </p>
-
-                            <p className="uf-caption font-semibold text-secondary">
-                              Encore{" "}
-                              {formatNumber(
-                                Math.max(
-                                  0,
-                                  challenge.target -
-                                    challenge.current
-                                )
-                              )}{" "}
-                              {
-                                challenge.unit
-                              }
-                            </p>
 
                           </div>
 
@@ -561,51 +674,25 @@ export default async function RecompensesPage() {
 
                       </div>
 
-                    </article>
+                    </div>
                   );
                 }
               )}
-
-            </div>
-          ) : (
-            <div className="uf-card mt-4 p-5 text-center">
-
-              <Trophy
-                size={24}
-                className="mx-auto text-primary"
-              />
-
-              <p className="uf-label mt-3 text-secondary">
-                Tous les défis sont accomplis
-              </p>
-
-              <p className="uf-caption mt-1 text-muted">
-                Beau parcours. De nouveaux défis pourront être ajoutés prochainement.
-              </p>
 
             </div>
           )}
 
         </section>
 
-        {/* Défis accomplis */}
-        <section className="mt-8">
-
-          <div className="flex items-center gap-2">
-
-            <CheckCircle2
-              size={18}
-              className="text-primary"
-            />
+        {/* Défis terminés */}
+        {completedChallenges.length >
+          0 && (
+          <section className="mt-8">
 
             <h2 className="uf-h3 text-secondary">
-              Défis accomplis
+              Défis terminés
             </h2>
 
-          </div>
-
-          {completedChallenges.length >
-          0 ? (
             <div className="mt-4 space-y-3">
 
               {completedChallenges.map(
@@ -616,20 +703,30 @@ export default async function RecompensesPage() {
                     challenge.icon;
 
                   return (
-                    <article
+                    <div
                       key={
-                        challenge.id
+                        challenge.title
                       }
                       className="uf-card flex items-center gap-4 p-4"
                     >
 
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+                      <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
+
                         <Icon
                           size={18}
                         />
+
+                        <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white">
+
+                          <CheckCircle2
+                            size={13}
+                          />
+
+                        </div>
+
                       </div>
 
-                      <div className="flex-1">
+                      <div className="min-w-0 flex-1">
 
                         <p className="uf-label text-secondary">
                           {
@@ -638,39 +735,30 @@ export default async function RecompensesPage() {
                         </p>
 
                         <p className="uf-caption mt-1 text-muted">
-                          {
-                            challenge.description
-                          }
+                          Défi terminé
                         </p>
 
                       </div>
 
                       <CheckCircle2
                         size={20}
-                        className="text-primary"
+                        className="shrink-0 text-primary"
                       />
 
-                    </article>
+                    </div>
                   );
                 }
               )}
 
             </div>
-          ) : (
-            <div className="uf-card mt-4 p-5">
 
-              <p className="uf-body text-muted">
-                Vos premiers défis apparaîtront ici dès qu&apos;ils seront accomplis.
-              </p>
-
-            </div>
-          )}
-
-        </section>
+          </section>
+        )}
 
       </div>
 
       <BottomNavigation />
+
     </main>
   );
 }
