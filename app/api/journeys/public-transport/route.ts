@@ -10,25 +10,8 @@ type TransitMode =
   | "tram"
   | "train";
 
-type Coordinates = {
-  lat: number;
-  lng: number;
-};
-
-type RequestBody = {
-  origin: Coordinates;
-  destination: Coordinates;
-  mode?: TransitMode;
-};
-
-function toRadians(
-  value: number
-) {
-  return (
-    value *
-    Math.PI /
-    180
-  );
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
 }
 
 function calculateDistanceMeters(
@@ -37,121 +20,64 @@ function calculateDistanceMeters(
   lat2: number,
   lng2: number
 ) {
-  const earthRadius =
-    6_371_000;
+  const earthRadius = 6_371_000;
 
-  const dLat =
-    toRadians(
-      lat2 - lat1
-    );
-
-  const dLng =
-    toRadians(
-      lng2 - lng1
-    );
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
 
   const a =
-    Math.sin(
-      dLat / 2
-    ) ** 2 +
-    Math.cos(
-      toRadians(
-        lat1
-      )
-    ) *
-      Math.cos(
-        toRadians(
-          lat2
-        )
-      ) *
-      Math.sin(
-        dLng / 2
-      ) ** 2;
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLng / 2) ** 2;
 
   const c =
     2 *
     Math.atan2(
       Math.sqrt(a),
-      Math.sqrt(
-        1 - a
-      )
+      Math.sqrt(1 - a)
     );
 
-  return (
-    earthRadius *
-    c
-  );
+  return earthRadius * c;
 }
 
-function normalizeSection(
-  section: any
-) {
+function normalizeSection(section: any) {
   let distanceMeters = 0;
 
-  if (
-    typeof section.length ===
-    "number"
-  ) {
-    distanceMeters =
-      section.length;
+  if (typeof section.length === "number") {
+    distanceMeters = section.length;
   } else if (
-    typeof section
-      .street_network
-      ?.length ===
+    typeof section.street_network?.length ===
     "number"
   ) {
     distanceMeters =
       section.street_network.length;
   } else {
-    const fromLat =
-      Number(
-        section.from
-          ?.stop_point
-          ?.coord?.lat ??
-          section.from
-            ?.coord?.lat
-      );
+    const fromLat = Number(
+      section.from?.stop_point?.coord?.lat ??
+        section.from?.coord?.lat
+    );
 
-    const fromLng =
-      Number(
-        section.from
-          ?.stop_point
-          ?.coord?.lon ??
-          section.from
-            ?.coord?.lon
-      );
+    const fromLng = Number(
+      section.from?.stop_point?.coord?.lon ??
+        section.from?.coord?.lon
+    );
 
-    const toLat =
-      Number(
-        section.to
-          ?.stop_point
-          ?.coord?.lat ??
-          section.to
-            ?.coord?.lat
-      );
+    const toLat = Number(
+      section.to?.stop_point?.coord?.lat ??
+        section.to?.coord?.lat
+    );
 
-    const toLng =
-      Number(
-        section.to
-          ?.stop_point
-          ?.coord?.lon ??
-          section.to
-            ?.coord?.lon
-      );
+    const toLng = Number(
+      section.to?.stop_point?.coord?.lon ??
+        section.to?.coord?.lon
+    );
 
     if (
-      Number.isFinite(
-        fromLat
-      ) &&
-      Number.isFinite(
-        fromLng
-      ) &&
-      Number.isFinite(
-        toLat
-      ) &&
-      Number.isFinite(
-        toLng
-      )
+      Number.isFinite(fromLat) &&
+      Number.isFinite(fromLng) &&
+      Number.isFinite(toLat) &&
+      Number.isFinite(toLng)
     ) {
       distanceMeters =
         calculateDistanceMeters(
@@ -170,38 +96,31 @@ function normalizeSection(
 
     mode:
       section.mode ??
-      section
-        .street_network
-        ?.mode ??
+      section.street_network?.mode ??
       null,
 
     physicalMode:
-      section
-        .display_informations
+      section.display_informations
         ?.physical_mode ??
       null,
 
     commercialMode:
-      section
-        .display_informations
+      section.display_informations
         ?.commercial_mode ??
       null,
 
     line:
-      section
-        .display_informations
+      section.display_informations
         ?.code ??
       null,
 
     lineName:
-      section
-        .display_informations
+      section.display_informations
         ?.name ??
       null,
 
     direction:
-      section
-        .display_informations
+      section.display_informations
         ?.direction ??
       null,
 
@@ -217,20 +136,39 @@ function normalizeSection(
       ),
 
     from:
-      section.from
-        ?.name ??
+      section.from?.name ??
       null,
 
     to:
-      section.to
-        ?.name ??
+      section.to?.name ??
       null,
   };
 }
 
-function normalizeJourney(
-  journey: any
-) {
+function normalizeJourney(journey: any) {
+  const sections =
+    Array.isArray(
+      journey.sections
+    )
+      ? journey.sections.map(
+          normalizeSection
+        )
+      : [];
+
+  const distanceMeters =
+    sections.reduce(
+      (
+        total: number,
+        section: any
+      ) =>
+        total +
+        Number(
+          section.distanceMeters ??
+            0
+        ),
+      0
+    );
+
   return {
     duration:
       Number(
@@ -254,23 +192,17 @@ function normalizeJourney(
 
     walkingDuration:
       Number(
-        journey.durations
-          ?.walking ??
+        journey.durations?.walking ??
           0
       ),
 
-    sections:
-      Array.isArray(
-        journey.sections
-      )
-        ? journey.sections.map(
-            normalizeSection
-          )
-        : [],
+    distanceMeters,
+
+    sections,
   };
 }
 
-export async function POST(
+export async function GET(
   request: NextRequest
 ) {
   try {
@@ -289,16 +221,28 @@ export async function POST(
       );
     }
 
-    let body: RequestBody;
+    const searchParams =
+      request.nextUrl.searchParams;
 
-    try {
-      body =
-        await request.json();
-    } catch {
+    const from =
+      searchParams.get("from");
+
+    const to =
+      searchParams.get("to");
+
+    const mode =
+      (
+        searchParams.get(
+          "mode"
+        ) ??
+        "all"
+      ) as TransitMode;
+
+    if (!from || !to) {
       return NextResponse.json(
         {
           error:
-            "Corps de requête invalide.",
+            "Coordonnées de départ ou de destination manquantes.",
         },
         {
           status: 400,
@@ -306,26 +250,24 @@ export async function POST(
       );
     }
 
-    const {
-      origin,
-      destination,
-      mode = "all",
-    } = body;
+    const validModes: TransitMode[] =
+      [
+        "all",
+        "metro",
+        "bus",
+        "tram",
+        "train",
+      ];
 
     if (
-      typeof origin?.lat !==
-        "number" ||
-      typeof origin?.lng !==
-        "number" ||
-      typeof destination?.lat !==
-        "number" ||
-      typeof destination?.lng !==
-        "number"
+      !validModes.includes(
+        mode
+      )
     ) {
       return NextResponse.json(
         {
           error:
-            "Coordonnées de départ ou de destination invalides.",
+            "Mode de transport invalide.",
         },
         {
           status: 400,
@@ -340,22 +282,17 @@ export async function POST(
 
     url.searchParams.set(
       "from",
-      `${origin.lng};${origin.lat}`
+      from
     );
 
     url.searchParams.set(
       "to",
-      `${destination.lng};${destination.lat}`
+      to
     );
 
     /*
-     * On laisse PRIM/Navitia
-     * calculer tous les modes
-     * lorsqu'on est sur "all".
-     *
-     * Le filtrage précis des modes
-     * peut rester géré par ton
-     * fonctionnement existant.
+     * On laisse Navitia retourner
+     * tous les transports pour "all".
      */
     if (mode !== "all") {
       url.searchParams.set(
@@ -368,28 +305,40 @@ export async function POST(
         "walking"
       );
 
-      if (mode === "metro") {
+      if (
+        mode ===
+        "metro"
+      ) {
         url.searchParams.append(
           "allowed_id[]",
           "physical_mode:Metro"
         );
       }
 
-      if (mode === "bus") {
+      if (
+        mode ===
+        "bus"
+      ) {
         url.searchParams.append(
           "allowed_id[]",
           "physical_mode:Bus"
         );
       }
 
-      if (mode === "tram") {
+      if (
+        mode ===
+        "tram"
+      ) {
         url.searchParams.append(
           "allowed_id[]",
           "physical_mode:Tramway"
         );
       }
 
-      if (mode === "train") {
+      if (
+        mode ===
+        "train"
+      ) {
         url.searchParams.append(
           "allowed_id[]",
           "physical_mode:Train"
