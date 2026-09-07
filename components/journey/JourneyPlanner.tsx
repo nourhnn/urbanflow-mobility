@@ -846,88 +846,68 @@ export default function JourneyPlanner() {
       ""
     );
   }
-  async function cancelSelectedJourney() {
-    if (
-      !selectedJourneyId
-    ) {
-      resetJourneySelection();
-      return;
-    }
-  
-    if (
-      journeyStatus !==
-      "planned"
-    ) {
-      resetJourneySelection();
-      return;
-    }
-  
-    setActionError("");
-  
-    try {
-      const response =
-        await fetch(
-          `/api/journeys/${selectedJourneyId}/cancel`,
-          {
-            method:
-              "POST",
-          }
-        );
-  
-      const text =
-        await response.text();
-  
-      let data:
-        | {
-            success?: boolean;
-            error?: string;
-          }
-        | null =
-        null;
-  
-      if (text) {
-        try {
-          data =
-            JSON.parse(text);
-        } catch {
-          console.error(
-            "Réponse annulation invalide :",
-            text
-          );
-        }
-      }
-  
-      if (
-        !response.ok
-      ) {
-        throw new Error(
-          data?.error ??
-            "Impossible d'annuler le trajet."
-        );
-      }
-  
-      resetJourneySelection();
-  
-      setTransitJourneys(
-        []
-      );
-  
-      setMapboxRoute(
-        null
-      );
-    } catch (error) {
-      console.error(
-        "Erreur annulation trajet :",
-        error
-      );
-  
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : "Impossible d'annuler le trajet."
-      );
-    }
+ async function cancelSelectedJourney() {
+  if (!selectedJourneyId) {
+    resetJourney();
+    return;
   }
+
+  setActionLoading(true);
+  setError("");
+
+  try {
+    const response =
+      await fetch(
+        `/api/journeys/${selectedJourneyId}/cancel`,
+        {
+          method:
+            "POST",
+        }
+      );
+
+    const text =
+      await response.text();
+
+    let data: any =
+      null;
+
+    if (text) {
+      try {
+        data =
+          JSON.parse(text);
+      } catch {
+        data =
+          null;
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error ??
+          "Impossible d'annuler le trajet."
+      );
+    }
+
+    resetJourney();
+
+    setSuccess(
+      "Le trajet a été annulé."
+    );
+  } catch (error) {
+    console.error(
+      "Erreur annulation trajet :",
+      error
+    );
+
+    setError(
+      error instanceof Error
+        ? error.message
+        : "Impossible d'annuler le trajet."
+    );
+  } finally {
+    setActionLoading(false);
+  }
+}
   function changeOriginMode(
     value: OriginMode
   ) {
